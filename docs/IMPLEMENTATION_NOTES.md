@@ -540,12 +540,26 @@ there are no parameters (SAT 4.0), project the vertices onto the curve.
    left over on a straight run are inserted into the triangle edge they lie
    on. A zero-area loop (out and back along itself) gives nothing.
 5. Lawson edge flips to Delaunay (planes too), then split interior edges
-   whose surface midpoint deviates more than the tolerance (less the
-   distance the end points lie off the surface: a spline that only
-   approximates the face would otherwise refine its border forever), flip
-   again; at most 64 rounds and 100,000 triangles per face (hitting either
-   is reported). An edge from a pole is measured along the meridian of its
-   other end; the uv midpoint follows a spiral that never converges.
+   whose surface midpoint lies further than the tolerance from the edge
+   (less the distance the end points lie off the surface: a spline that
+   only approximates the face would otherwise refine its border forever),
+   flip again; at most 64 rounds and 100,000 triangles per face, and
+   refinement stops when the largest deviation has not halved in 8 rounds
+   (a smooth surface quarters it every round; a face whose uv triangles do
+   not follow the surface, where the parameterisation folds or jumps, kept
+   the same deviation until it reached the triangle limit). Each of these
+   is reported. An edge from a pole is measured along the meridian
+   of its other end; the uv midpoint follows a spiral that never converges.
+   On curved surfaces the flips are Delaunay in the surface's own metric:
+   the uv points of each quad are mapped by the mean first fundamental form
+   (E, F, G from differences) of its corners. In plain uv a stretched
+   parameterisation (most spline surfaces; a torus whose tube is wider
+   than its ring) gave triangles that were round in uv but slivers on the
+   surface, and refining slivers until their long edges met the tolerance
+   took many times the triangles, often up to the per-face limit. The
+   deviation is measured from the edge, not from its midpoint: where the
+   parameter runs unevenly, the uv midpoint lies to one side along the
+   surface, an offset that shrinks only with the edge length.
 6. The tolerance is per body: `max(0.1 mm / body scale, 0.1 % of the body
    diagonal)`. The body transform scale matters because bodies are often in mm.
 7. Orientation: the uv triangulation winds around Su x Sv; it is turned

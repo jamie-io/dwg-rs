@@ -23,6 +23,12 @@ use crate::limits::MAX_TRIANGLES_PER_FACE;
 
 const RELATIVE_DEVIATION: f64 = 1e-3;
 
+/// Refinement rounds in which the largest deviation must at least halve.
+/// On a smooth surface every round quarters it (halves it at a crease); a
+/// face whose uv triangles do not follow its surface (a parameterisation
+/// that folds or jumps) keeps the same deviation however often it is split.
+const STALL_ROUNDS: usize = 8;
+
 pub type Tri = [Vec3; 3];
 
 /// A loop in the uv domain with its 3D points.
@@ -56,8 +62,8 @@ pub struct Tessellator {
     pub approximated_faces: usize,
     /// Faces whose boundary polygon could not be ear-clipped cleanly.
     pub degraded_faces: usize,
-    /// Faces whose refinement hit [`MAX_TRIANGLES_PER_FACE`] before
-    /// reaching the tolerance.
+    /// Faces whose refinement hit [`MAX_TRIANGLES_PER_FACE`] or stopped
+    /// converging ([`STALL_ROUNDS`]) before reaching the tolerance.
     pub capped_faces: usize,
     /// Per triangle of the last [`Tessellator::body`]: the surface's unit
     /// normals at its corners (None for faces without a surface).
@@ -462,7 +468,7 @@ impl Tessellator {
         }
         if let Surface::Plane(_) = surf {
             // no refinement, but Delaunay flips remove the slivers ear clipping leaves
-            let tris = delaunay_flips(&uv_all, tri_idx, &boundary);
+            let tris = delaunay_flips(&uv_all, None, tri_idx, &boundary);
             return Ok(UvFace::Tris(
                 tris.iter().map(|t| t.map(|i| xyz_all[i])).collect(),
             ));
@@ -718,10 +724,29 @@ impl Tessellator {
                         .all(|d| length(sub(surf.eval(q[0] + d, q[1]), p)) <= 1e-9 * size)
             })
             .collect();
-        let mut tris = delaunay_flips(&uv, tris, boundary);
+        // the surface's own metric where uv may be stretched: a torus's u is
+        // the angle times the ring radius (the tube may be far wider), a
+        // spline's parameters can be anything. A cone's and a sphere's u
+        // and v are lengths on the surface (stretched only towards an apex
+        // or a pole, which costs a few triangles there): they keep plain uv
+        let stretched = matches!(
+            surf,
+            Surface::Torus(_) | Surface::Spline(_) | Surface::Pipe(_)
+        );
+        let h = [1e-6 * extent(0, &uv), 1e-6 * extent(1, &uv)];
+        let measure = |q: Vec2| surface_metric(surf, q, h);
+        let mut metric: Vec<[f64; 3]> = if stretched {
+            uv.iter().map(|&q| measure(q)).collect()
+        } else {
+            vec![]
+        };
+        let mut tris = delaunay_flips(&uv, stretched.then_some(&metric[..]), tris, boundary);
         let mut done = false;
+        // the largest deviation found in each round
+        let mut worst: Vec<f64> = vec![];
         for it in 0..64 {
             let mut split: HashMap<(usize, usize), usize> = HashMap::new();
+            let mut round_worst: f64 = 0.0;
             for &[a, b, c] in &tris {
                 for (x, y) in [(a, b), (b, c), (c, a)] {
                     let key = (x.min(y), x.max(y));
@@ -739,11 +764,23 @@ impl Tessellator {
                         (false, true) => surf.eval(uv[x][0], muv[1]),
                         (false, false) => p,
                     };
-                    if it < force || length(sub(test, chord)) - (off[x] + off[y]) / 2.0 > tol {
+                    // the distance from the segment, not from its midpoint:
+                    // where the parameter runs unevenly along the edge, the
+                    // uv midpoint lies to one side along the surface, an
+                    // offset that only shrinks with the edge length (not
+                    // with its square, as the deviation does)
+                    let dev = seg_dist(test, xyz[x], xyz[y]) - (off[x] + off[y]) / 2.0;
+                    if dev > tol {
+                        round_worst = round_worst.max(dev);
+                    }
+                    if it < force || dev > tol {
                         split.insert(key, uv.len());
                         uv.push(muv);
                         xyz.push(p);
                         off.push(0.0);
+                        if stretched {
+                            metric.push(measure(muv));
+                        }
                     }
                 }
             }
@@ -754,8 +791,12 @@ impl Tessellator {
             if tris.len() > MAX_TRIANGLES_PER_FACE {
                 break;
             }
+            worst.push(round_worst);
+            if it >= force + STALL_ROUNDS && round_worst > 0.5 * worst[it - STALL_ROUNDS] {
+                break;
+            }
             let new: Vec<[usize; 3]> = tris.iter().flat_map(|&t| split_tri(t, &split)).collect();
-            tris = delaunay_flips(&uv, new, boundary);
+            tris = delaunay_flips(&uv, stretched.then_some(&metric[..]), new, boundary);
         }
         if !done {
             self.capped_faces += 1;
@@ -1179,6 +1220,7 @@ fn shift_into(hole: &[Vec2], outer: &[Vec2], pu: f64, pv: f64) -> Result<Vec<Vec
 /// midpoint refinement explode; flipping to Delaunay keeps triangles round.
 fn delaunay_flips(
     uv: &[Vec2],
+    metric: Option<&[[f64; 3]]>,
     mut tris: Vec<[usize; 3]>,
     boundary: &HashSet<(usize, usize)>,
 ) -> Vec<[usize; 3]> {
@@ -1192,16 +1234,17 @@ fn delaunay_flips(
             }
         }
     }
-    let incircle = |a: usize, b: usize, c: usize, d: usize| {
-        let (ax, ay) = (uv[a][0] - uv[d][0], uv[a][1] - uv[d][1]);
-        let (bx, by) = (uv[b][0] - uv[d][0], uv[b][1] - uv[d][1]);
-        let (cx, cy) = (uv[c][0] - uv[d][0], uv[c][1] - uv[d][1]);
-        (ax * ax + ay * ay) * (bx * cy - cx * by) - (bx * bx + by * by) * (ax * cy - cx * ay)
-            + (cx * cx + cy * cy) * (ax * by - bx * ay)
-    };
-    let orient = |a: usize, b: usize, c: usize| {
-        (uv[b][0] - uv[a][0]) * (uv[c][1] - uv[a][1])
-            - (uv[b][1] - uv[a][1]) * (uv[c][0] - uv[a][0])
+    let turn = |a: usize, b: usize, c: usize| orient(uv[a], uv[b], uv[c]);
+    // Delaunay in the surface's own metric where it is known: a
+    // parameterisation that stretches one direction (most splines, a torus
+    // whose tube is wider than its ring) would otherwise give triangles
+    // that are round in uv but slivers on the surface, and refining those
+    // takes many times the triangles
+    let not_delaunay = |a: usize, b: usize, c: usize, d: usize| {
+        let map = metric.and_then(|m| quad_metric(m, [a, b, c, d]));
+        let q = |i: usize| map.as_ref().map_or(uv[i], |l| l(uv[i]));
+        let (qa, qb, qc, qd) = (q(a), q(b), q(c), q(d));
+        incircle(qa, qb, qc, qd) > 1e-12 * (orient(qa, qb, qc).powi(2) + 1e-300)
     };
     let apex = |t: [usize; 3], a: usize, b: usize| {
         let [x, y, z] = t;
@@ -1229,10 +1272,10 @@ fn delaunay_flips(
             continue;
         };
         let (c, d) = (apex(tris[t1], a, b), apex(tris[t2], b, a));
-        if incircle(a, b, c, d) <= 1e-12 * (orient(a, b, c).powi(2) + 1e-300) {
+        if !not_delaunay(a, b, c, d) {
             continue;
         }
-        if orient(a, d, c) <= 0.0 || orient(d, b, c) <= 0.0 {
+        if turn(a, d, c) <= 0.0 || turn(d, b, c) <= 0.0 {
             continue; // non-convex quad
         }
         tris[t1] = [a, d, c];
@@ -1248,6 +1291,64 @@ fn delaunay_flips(
         stack.extend([(a, d), (d, b), (b, c), (c, a)]);
     }
     tris
+}
+
+fn orient(a: Vec2, b: Vec2, c: Vec2) -> f64 {
+    (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+}
+
+/// Positive when d lies inside the circle through a, b, c (counter-clockwise).
+fn incircle(a: Vec2, b: Vec2, c: Vec2, d: Vec2) -> f64 {
+    let (ax, ay) = (a[0] - d[0], a[1] - d[1]);
+    let (bx, by) = (b[0] - d[0], b[1] - d[1]);
+    let (cx, cy) = (c[0] - d[0], c[1] - d[1]);
+    (ax * ax + ay * ay) * (bx * cy - cx * by) - (bx * bx + by * by) * (ax * cy - cx * ay)
+        + (cx * cx + cy * cy) * (ax * by - bx * ay)
+}
+
+/// The surface's first fundamental form [E, F, G] = [Su.Su, Su.Sv, Sv.Sv]
+/// at a uv point, from differences of step h. Each derivative takes the
+/// longer of the forward and the backward difference: at a clamped end of
+/// a spline domain one of them is zero.
+fn surface_metric(surf: &Surface, q: Vec2, h: Vec2) -> [f64; 3] {
+    let p = surf.eval(q[0], q[1]);
+    let derivative = |k: usize| {
+        let diff = |sign: f64| {
+            let mut r = q;
+            r[k] += sign * h[k];
+            mul(sub(surf.eval(r[0], r[1]), p), sign / h[k])
+        };
+        let (fwd, back) = (diff(1.0), diff(-1.0));
+        if dot(fwd, fwd) >= dot(back, back) {
+            fwd
+        } else {
+            back
+        }
+    };
+    let (su, sv) = (derivative(0), derivative(1));
+    [dot(su, su), dot(su, sv), dot(sv, sv)]
+}
+
+/// The linear map that takes uv to lengths on the surface around four
+/// points: the upper triangular factor L of their mean first fundamental
+/// form M (|L q|^2 = q^T M q). None where M is degenerate (all at a pole).
+fn quad_metric(metric: &[[f64; 3]], ids: [usize; 4]) -> Option<impl Fn(Vec2) -> Vec2> {
+    let mut m = [0.0; 3];
+    for i in ids {
+        for k in 0..3 {
+            m[k] += metric[i][k] / 4.0;
+        }
+    }
+    let [e, f, g] = m;
+    if !(e > 0.0 && g > 0.0) {
+        return None;
+    }
+    let det = g - f * f / e;
+    if !(det > 1e-12 * e.max(g) && det.is_finite()) {
+        return None;
+    }
+    let (l00, l01, l11) = (e.sqrt(), f / e.sqrt(), det.sqrt());
+    Some(move |q: Vec2| [l00 * q[0] + l01 * q[1], l11 * q[1]])
 }
 
 fn split_tri(t: [usize; 3], split: &HashMap<(usize, usize), usize>) -> Vec<[usize; 3]> {
@@ -1354,7 +1455,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::acis::brep::{Cone, Pipe, Plane, Sphere};
+    use crate::acis::brep::{Cone, Pipe, Plane, Sphere, Torus};
     use crate::acis::nurbs::BSplineCurve;
 
     fn total_area(tris: &[Tri]) -> f64 {
@@ -1594,6 +1695,29 @@ mod tests {
         );
         let tris = Tessellator::new(1e-3).face(&f).unwrap();
         assert!((total_area(&tris) - 4.0 * PI).abs() < 0.02 * 4.0 * PI);
+    }
+
+    #[test]
+    fn stretched_parameters_refine_on_the_surface() {
+        // a torus whose ring (0.05) is far smaller than its tube (10): u is
+        // the angle times 0.05, so the surface is 200 times longer in u than
+        // its uv; round uv triangles would be slivers on it
+        let f = face(
+            Surface::Torus(Torus::new(
+                [0.0; 3],
+                [0.0, 0.0, 1.0],
+                0.05,
+                10.0,
+                [1.0, 0.0, 0.0],
+            )),
+            vec![],
+        );
+        let mut tess = Tessellator::new(0.01);
+        let tris = tess.face(&f).unwrap();
+        assert_eq!(tess.capped_faces, 0);
+        // about 29 000 (both sheets of what is nearly a sphere of radius 10);
+        // stretched uv triangles reached the per-face limit
+        assert!(tris.len() < 40_000, "{} triangles", tris.len());
     }
 
     #[test]
