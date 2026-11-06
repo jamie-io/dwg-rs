@@ -427,11 +427,16 @@ samples/
 | `--subset N`, `--group G ...` | a fixed sample of N drawings; only these subfolders |
 | `--skip-render`, `--skip-collage` | no Blender renders at all; no collages, slides or shots |
 | `--plugins FILE ...` | extra metrics |
-| `--workers 6`, `--timeout 600` | parallel conversions; seconds per conversion |
+| `--workers N`, `--timeout 600` | parallel convert+compare processes (default: all cores, fewer when memory is short, about 2.5 GB each); seconds per conversion |
 | `--keep-glbs 4` | GLB cache cap in GB, `all` or `none` |
 | `--min-free-gb 12` | refuse to start with less free disk space |
 
 Limited runs (`--subset`, `--group`, `--skip-render`) do not move `latest` unless `--set-latest`.
+
+Every drawing is converted with the new binary, but a comparison is only computed when the GLB is new:
+results are cached by the GLB's content (`cache/compare-glb/`), so a change that touches a few drawings
+compares only those. Drawings run slowest first, using the times of the previous run, so one long
+conversion does not hold up the end of a run.
 
 | Output (in `--out`) | Content |
 | --- | --- |

@@ -37,6 +37,7 @@ import argparse
 import csv
 import hashlib
 import html
+import hashlib
 import json
 import os
 import shutil
@@ -54,7 +55,7 @@ SAMPLES = os.path.join(REPO, "samples")
 OUT = os.path.join(REPO, "samples", "compare")
 BLENDER = os.environ.get("BLENDER", "/usr/bin/blender")
 RENDER = {"eng": {"res": 640, "samples": 16}, "present": {"res": 1024, "samples": 96}}
-COLUMNS = compare.COLUMNS + ["run_id"]
+COLUMNS = compare.COLUMNS + ["compare_s", "run_id"]
 STATUS_RANK = {"pass": 0, "skip": 0, "warn": 1, "fail": 2, "error": 2}
 DIFF_METRICS = ["score", "chamfer", "haus95", "extent_err", "area_err", "missing", "extra", "inside_out", "color",
                 "texture", "tex_scale", "normal_map", "tris_ours"]
@@ -199,6 +200,31 @@ def both_empty(res, job):
     return res
 
 
+def file_sha(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def compare_cached(glb, job):
+    """compare_glbs, cached by the GLB's content: a new binary that writes the same bytes for a drawing
+    reuses the metrics of an earlier binary. compare_glbs only sees the two GLBs and is deterministic,
+    so the cached result is the one it would compute."""
+    path = os.path.join(job["glb_cmp"], f"{file_sha(glb)[:32]}-{job['ref_sha'][:16]}-{job['chash']}.json")
+    if os.path.exists(path):
+        try:
+            return dict(json.load(open(path)), _reused=True)
+        except ValueError:
+            pass  # a half-written file from an interrupted run
+    t0 = time.time()
+    res = compare.compare_glbs(glb, job["ref"], _PLUGINS)
+    res["compare_s"] = round(time.time() - t0, 2)
+    write_json(path, res)
+    return res
+
+
 def work(job):
     global _PLUGINS
     try:
@@ -236,11 +262,11 @@ def work(job):
             res.update(status="fail", score=0.0, reasons="convert_failed", category="convert_failed",
                        categories="convert_failed", error=last)
         else:
-            res.update(compare.compare_glbs(glb, job["ref"], _PLUGINS))
+            res.update(compare_cached(glb, job))
             if "status" not in res:  # nothing converted
                 cat = "series_dwg" if res.get("series_hint") else "empty"
                 res.update(status="fail", score=0.0, reasons=cat, category=cat, categories=cat)
-        write_json(job["cmp"], res)
+        write_json(job["cmp"], {k: v for k, v in res.items() if not k.startswith("_")})
         res = both_empty(res, job)
         if os.path.exists(glb) and not job["keep_all"] and (job["keep_none"] or (not job["keep"] and res["status"] in ("pass", "skip"))):
             os.remove(glb)  # flagged and selected drawings keep theirs; others are converted again if needed
@@ -393,6 +419,38 @@ def convert_only(job):
     return False
 
 
+def pool_size(workers, gb_each=2.5):
+    """Worker processes: at most `workers`, and no more than the available memory allows. The largest
+    drawings need about 1.2 GB to convert and 2.3 GB to compare (3 million triangles)."""
+    try:
+        avail = next(int(l.split()[1]) for l in open("/proc/meminfo") if l.startswith("MemAvailable:")) / 2**20
+    except (OSError, StopIteration, ValueError):
+        return max(1, workers)
+    return max(1, min(workers, int(avail / gb_each)))
+
+
+def previous_seconds(out):
+    """Seconds per drawing (convert + compare) from the newest run that recorded them, by key."""
+    for j in reversed(runs(out)):
+        path = os.path.join(out, "runs", j["run_id"], "results.csv") if "run_id" in j else None
+        if not path or not os.path.exists(path):
+            continue
+        secs = {}
+        with open(path, encoding="utf-8") as f:
+            for r in csv.DictReader(f):
+                t = 0.0
+                for c in ("convert_s", "compare_s"):
+                    try:
+                        t += float(r.get(c) or 0)
+                    except ValueError:
+                        pass
+                if t:
+                    secs[row_key(r.get("group", r.get("folder", "")), r["file"])] = t
+        if secs:
+            return secs
+    return {}
+
+
 def ensure_glbs(rows, conv, opts, timeout=600, workers=6):
     """Convert again the GLBs of these rows with the run's binary (only if it is still the same file)."""
     rows = [r for r in rows if not os.path.exists(r["glb"])]
@@ -406,7 +464,7 @@ def ensure_glbs(rows, conv, opts, timeout=600, workers=6):
     jobs = [dict(bin=path, dwg=r["dwg"], glb=r["glb"], opts=opts, timeout=timeout) for r in rows]
     for j in jobs:
         os.makedirs(os.path.dirname(j["glb"]), exist_ok=True)
-    with ProcessPoolExecutor(min(workers, 6)) as ex:
+    with ProcessPoolExecutor(pool_size(workers)) as ex:
         return sum(ex.map(convert_only, jobs))
 
 
@@ -505,20 +563,29 @@ def cmd_run(a):
                            f"{it['dwg_sha'][:24]}-{it['ref_sha'][:16]}-{chash}.json")
         jobs.append(dict(dwg=it["dwg"], ref=it["ref"], glb=it["glb"], cmp=cmp, bin=conv["path"], opts=opts,
                          timeout=a.timeout, plugins=plugins, keep=it["key"] in sel_keys, keep_all=a.keep_glbs == "all",
-                         keep_none=a.keep_glbs == "none"))
-    rows, cached = [], 0
-    with ProcessPoolExecutor(min(a.workers, 6)) as ex:
-        futs = {ex.submit(work, j): it for j, it in zip(jobs, items)}
+                         keep_none=a.keep_glbs == "none", ref_sha=it["ref_sha"], chash=chash,
+                         glb_cmp=os.path.join(out, "cache", "compare-glb")))
+    os.makedirs(os.path.join(out, "cache", "compare-glb"), exist_ok=True)
+    # Slowest drawings first (times of the previous run, else file size), so a long conversion does not
+    # start last and leave the other workers idle at the end.
+    prev = previous_seconds(out)
+    order = sorted(range(len(jobs)), key=lambda i: (-prev.get(items[i]["key"], 0.0), -os.path.getsize(items[i]["dwg"])))
+    workers = pool_size(a.workers)
+    log(f"  {workers} workers" + (f" (memory limits --workers {a.workers})" if workers < a.workers else ""))
+    rows, cached, reused = [], 0, 0
+    with ProcessPoolExecutor(workers) as ex:
+        futs = {ex.submit(work, jobs[i]): items[i] for i in order}
         for k, fu in enumerate(as_completed(futs), 1):
             it = futs[fu]
             res = fu.result()
             cached += bool(res.pop("_cached", False))
+            reused += bool(res.pop("_reused", False))
             row = dict(it)
             row.update(res)
             row.update(run_id=run_id, commit=conv["commit"])
             rows.append(row)
             if k % 50 == 0 or k == len(jobs):
-                log(f"  compared {k}/{len(jobs)} ({cached} cached) {time.time() - t0:.0f}s")
+                log(f"  compared {k}/{len(jobs)} ({cached} cached, {reused} same GLB as before) {time.time() - t0:.0f}s")
     rows.sort(key=lambda r: (r.get("score") if isinstance(r.get("score"), (int, float)) else -1, r["key"]))
     timings["compare"] = round(time.time() - t0, 1)
     with open(os.path.join(run_dir, "results.csv"), "w", newline="", encoding="utf-8") as f:
@@ -923,7 +990,8 @@ def main():
     r.add_argument("--skip-collage", action="store_true", help="no collages, slides or shots")
     r.add_argument("--set-latest", action="store_true", help="point latest at a limited run too")
     r.add_argument("--plugins", nargs="*", help="metric plugin files (each defines METRICS = [fn(ctx, res)])")
-    r.add_argument("--workers", type=int, default=6)
+    r.add_argument("--workers", type=int, default=os.cpu_count() or 4,
+                   help="parallel convert+compare processes (default: all cores, fewer if memory is short)")
     r.add_argument("--timeout", type=int, default=600, help="seconds per conversion")
     r.add_argument("--max-report", type=int, default=400, help="most warn/fail files rendered in the report")
     r.add_argument("--four-views", type=int, default=40, help="worst files rendered from four directions")
