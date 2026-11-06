@@ -1,0 +1,104 @@
+/*****************************************************************************/
+/*  LibreDWG - free implementation of the DWG file format                    */
+/*                                                                           */
+/*  Copyright (C) 2019,2026 Free Software Foundation, Inc.                        */
+/*                                                                           */
+/*  This library is free software, licensed under the terms of the GNU       */
+/*  General Public License as published by the Free Software Foundation,     */
+/*  either version 3 of the License, or (at your option) any later version.  */
+/*  You should have received a copy of the GNU General Public License        */
+/*  along with this program.  If not, see <http://www.gnu.org/licenses/>.    */
+/*****************************************************************************/
+
+/*
+ * geom.h: geometric projections from OCS
+ * written by Reini Urban
+ */
+
+#ifndef _GEOM_H_
+#define _GEOM_H_
+
+#include "config.h"
+#include <dwg.h>
+
+#ifndef M_PI
+#  define M_PI 3.14159265358979323846264338327950288
+#endif
+
+// avoid double linkage on windows with unit-testing
+#ifdef GEOM_TEST_C
+#  undef EXPORT
+#  define EXPORT
+#endif
+
+// void normalize (BITCODE_3DPOINT *out, BITCODE_3DPOINT pt);
+// void cross (BITCODE_3DPOINT *out, BITCODE_3DPOINT pt1, BITCODE_3DPOINT pt2);
+//  transform a 2D point via its OCS (extrusion) to 2D
+EXPORT void transform_OCS_2d (BITCODE_2DPOINT *out, BITCODE_2DPOINT pt,
+                              BITCODE_BE ext) __nonnull ((1));
+// transform a 3D point via its OCS (extrusion) to 2D
+EXPORT void transform_OCS (BITCODE_3DPOINT *out, BITCODE_3DPOINT pt,
+                           BITCODE_BE ext) __nonnull ((1));
+// true if transform_OCS_2d mirrors, which reverses the sense of arcs
+EXPORT int transform_OCS_2d_is_mirrored (BITCODE_BE ext);
+
+void angle_vector_2d (BITCODE_2DPOINT *out, BITCODE_2DPOINT ctr,
+                      BITCODE_BD angle, BITCODE_BD len) __nonnull ((1));
+EXPORT void arc_split (BITCODE_2BD *pts, const int num_pts,
+                       const BITCODE_2BD center_2d, BITCODE_BD start_angle,
+                       BITCODE_BD end_angle, const BITCODE_BD radius)
+    __nonnull ((1));
+
+// Normalize an angle to [0, 2*PI).  Handles inf, nan and denormals.
+double angle_normalize (double angle);
+
+// The arc of the polyline segment p1 -> p2 with bulge, tan(sweep / 4).
+// Returns 0 for a straight segment, else 1 with the center, radius,
+// start angle and signed sweep (positive is counter-clockwise).
+EXPORT int bulge_to_arc (const BITCODE_2BD p1, const BITCODE_2BD p2,
+                         const double bulge, BITCODE_2BD *center,
+                         double *radius, double *start_angle, double *sweep)
+    __nonnull ((4, 5, 6, 7));
+// Split a bulged polyline segment into num_pts points, from p1 up to but
+// excluding p2.  Returns the number of points written (1 if straight).
+EXPORT int bulge_split (BITCODE_2BD *pts, const int num_pts,
+                        const BITCODE_2BD p1, const BITCODE_2BD p2,
+                        const double bulge) __nonnull ((1));
+
+// The highest SPLINE degree the spline functions handle.
+#define SPLINE_MAX_DEGREE 15
+// True if the SPLINE has usable control points and knots.
+EXPORT int spline_is_valid (const Dwg_Entity_SPLINE *spline);
+// De Boor: the point of the SPLINE at parameter t, clamped to its range.
+// Returns 0 if the SPLINE is not valid.
+EXPORT int spline_eval (BITCODE_3DPOINT *out, const Dwg_Entity_SPLINE *spline,
+                        double t) __nonnull ((1, 2));
+// The SPLINE as a chain of Bezier curves of its degree, by knot insertion.
+// Returns the number k of curves and a malloc'ed array of k*degree+1 points,
+// or 0 if the SPLINE is not valid, clamped and non-rational.
+EXPORT int spline_to_bezier (const Dwg_Entity_SPLINE *spline,
+                             BITCODE_3DPOINT **pts) __nonnull ((1, 2));
+// AutoCAD's cubic interpolation of the fit points of a SPLINE.  Sets *out
+// to a copy with the computed control points and knots, to be freed by the
+// caller.  Returns 0 if the fit points cannot be interpolated.
+EXPORT int spline_from_fit_points (const Dwg_Entity_SPLINE *spline,
+                                   Dwg_Entity_SPLINE *out) __nonnull ((1, 2));
+// The limits of spline_flatten: halvings per Bezier curve, points, and
+// evaluated points per knot span when there are no Bezier curves.
+#define BEZIER_MAX_DEPTH 16
+#define SPLINE_MAX_POINTS 1000000
+#define SPLINE_EVAL_STEPS 16
+// Points on the curve of a SPLINE, within rel_tol times its size, as a
+// malloc'ed array.  Returns their number, or 0.
+EXPORT int spline_flatten (const Dwg_Entity_SPLINE *spline,
+                           const double rel_tol, BITCODE_3DPOINT **pts)
+    __nonnull ((1, 3));
+
+/* Fast V4 Spatial Geometry Transformations (Klein Four-Group V4 ≅ Z2 x Z2)
+ * Note: V4 refers to the Klein 4-group integer matrix over the S12 lattice,
+ * not some Version 4 or 4D vectors.
+ */
+EXPORT uint32_t dwg_transform_v4(Dwg_Data *dwg);
+EXPORT void dwg_geom_v4_transform_2d(double *x, double *y);
+
+#endif /* _GEOM_H_ */

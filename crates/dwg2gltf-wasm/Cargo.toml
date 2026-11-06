@@ -1,0 +1,16 @@
+[package]
+name = "dwg2gltf-wasm"
+description = "dwg2gltf as a WebAssembly module, for the three.js DWGLoader (packages/three-dwg-loader)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+dwg2gltf = { path = "../dwg2gltf", default-features = false }
+serde_json = { version = "1.0.152", features = ["preserve_order"] }

@@ -1,0 +1,8 @@
+# Build from the crates in vendor/ (cargo vendor --locked vendor), so a
+# checkout builds without network access. After changing dependencies, run
+# `cargo vendor --locked vendor` again and commit vendor/.
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"

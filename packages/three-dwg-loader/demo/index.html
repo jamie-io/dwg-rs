@@ -1,0 +1,124 @@
+<!doctype html>
+<!-- SPDX-FileCopyrightText: 2026 Jamie Jahn
+     SPDX-License-Identifier: GPL-3.0-or-later -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DWGLoader demo</title>
+<style>
+	:root {
+		--bg: #f4f4f1; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66;
+		--line: #deded8; --accent: #2f6fdb; --error: #b42318; --view: #e9e9e4;
+		color-scheme: light dark;
+	}
+	@media (prefers-color-scheme: dark) {
+		:root {
+			--bg: #151515; --panel: #1e1e1d; --text: #ececea; --muted: #9a9a94;
+			--line: #33332f; --accent: #6d9cf0; --error: #f97066; --view: #232322;
+		}
+	}
+	* { box-sizing: border-box; }
+	html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+		font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+	body { display: grid; grid-template-columns: 320px 1fr; }
+	aside { background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto;
+		padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+	main { position: relative; min-width: 0; }
+	canvas { display: block; width: 100%; height: 100%; }
+	h1 { font-size: 16px; margin: 0; }
+	h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 6px; }
+	label { display: flex; align-items: center; gap: 8px; }
+	select, input[type=number] { font: inherit; color: inherit; background: var(--bg);
+		border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
+	.row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+	.options { display: grid; gap: 6px; }
+	button { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line);
+		border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+	button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+	button:disabled { opacity: .5; cursor: default; }
+	#drop { border: 1.5px dashed var(--line); border-radius: 8px; padding: 14px; text-align: center; color: var(--muted); }
+	#drop.over { border-color: var(--accent); color: var(--accent); }
+	#blockList { display: grid; gap: 2px; max-height: 240px; overflow-y: auto; }
+	#blockList label { padding: 2px 4px; border-radius: 4px; }
+	#blockList label:hover { background: var(--bg); }
+	pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+	#error { color: var(--error); }
+	#status { position: absolute; left: 12px; bottom: 10px; color: var(--muted); font-size: 12px; }
+	.hidden { display: none !important; }
+	footer { margin-top: auto; color: var(--muted); font-size: 12px; }
+	a { color: var(--accent); }
+	@media (max-width: 720px) {
+		body { grid-template-columns: 1fr; grid-template-rows: 55vh auto; }
+		aside { order: 2; border-right: 0; border-top: 1px solid var(--line); }
+		main { order: 1; }
+	}
+</style>
+<script type="importmap">
+	{
+		"imports": {
+			"three": "../node_modules/three/build/three.module.js",
+			"three/addons/": "../node_modules/three/examples/jsm/"
+		}
+	}
+</script>
+</head>
+<body>
+<aside>
+	<h1>DWGLoader demo</h1>
+
+	<section>
+		<div id="drop">Drop a DWG here (with its texture images, if any)<br>or
+			<button id="open" type="button">Open files…</button></div>
+		<input id="files" type="file" accept=".dwg,.png,.jpg,.jpeg" multiple class="hidden">
+	</section>
+
+	<section class="options">
+		<h2>Options</h2>
+		<label><input id="lines" type="checkbox" checked> Lines</label>
+		<label><input id="planSymbols" type="checkbox"> OFML plan symbols</label>
+		<label><input id="zUp" type="checkbox"> Keep Z up</label>
+		<div class="row"><span>Units</span>
+			<select id="units">
+				<option value="">from the file</option>
+				<option>mm</option><option>cm</option><option>dm</option><option>m</option>
+				<option>in</option><option>ft</option><option>yd</option>
+			</select></div>
+		<div class="row"><span>Series DWG</span>
+			<select id="blocks">
+				<option value="auto">detect</option>
+				<option value="true">one per article</option>
+				<option value="false">model space</option>
+			</select></div>
+		<div class="row"><span>Timeout (ms, 0 = none)</span><input id="timeout" type="number" min="0" step="100" value="0" style="width: 90px"></div>
+	</section>
+
+	<section id="blockSection" class="hidden">
+		<h2>Articles</h2>
+		<div id="blockList"></div>
+	</section>
+
+	<section id="resultSection" class="hidden">
+		<h2>Converted</h2>
+		<pre id="summary"></pre>
+		<p class="row"><span id="timings"></span><button id="download" type="button">Download GLB</button></p>
+	</section>
+
+	<section id="errorSection" class="hidden">
+		<h2>Error</h2>
+		<pre id="error"></pre>
+		<details id="stderrBox" class="hidden"><summary>Converter output</summary><pre id="stderr"></pre></details>
+	</section>
+
+	<footer>
+		dwg2gltf compiled to WebAssembly (LibreDWG inside), GPL-3.0-or-later.
+		Source: this repository's <code>packages/three-dwg-loader</code>.
+	</footer>
+</aside>
+<main>
+	<canvas id="view"></canvas>
+	<div id="status">Drop a DWG file, or add ?url=path/to/file.dwg</div>
+</main>
+<script type="module" src="main.js"></script>
+</body>
+</html>

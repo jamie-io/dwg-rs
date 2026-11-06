@@ -1,0 +1,77 @@
+R2010+ header variables and classes sections: the RL size counts the data
+after the RL high size word, and that word is 0, as in AutoCAD's and ODA's
+files. LibreDWG 0.14 counted the high word in the size (and wrote bitsize/8
+into it for the classes), so ODA-based readers read the CRC
+4 bytes too late and refused every written file with "CRC does not match".
+LibreDWG's own reader does not check these CRCs.
+
+diff --git a/src/encode.c b/src/encode.c
+index ba022dd..a931c8a 100644
+--- a/src/encode.c
++++ b/src/encode.c
+@@ -2058,12 +2058,33 @@ encode_r13_thumbnail (Dwg_Data *restrict dwg, Bit_Chain *restrict dat,
+ /*------------------------------------------------------------
+  * Header Variables
+  */
++/* R2010+ header and classes sections: RL size, RL high size word, data.
++   The size counts the data after the high word, and the high word is 0, as
++   in AutoCAD's and ODA's files. */
++static void
++encode_patch_RLsize_hi (Bit_Chain *dat, size_t size_adr, size_t hi_adr)
++{
++  size_t pos;
++  if (dat->bit) // padding
++    {
++      dat->bit = 0;
++      dat->byte++;
++    }
++  pos = bit_position (dat);
++  bit_set_position (dat, size_adr * 8);
++  bit_write_RL (dat, (BITCODE_RL)((pos / 8 - hi_adr - 4) & 0xFFFFFFFF));
++  bit_set_position (dat, hi_adr * 8);
++  bit_write_RL (dat, 0);
++  bit_set_position (dat, pos);
++}
++
+ static int
+ encode_header_vars (Dwg_Data *restrict dwg, Bit_Chain *restrict dat,
+                     Dwg_Version_Type orig_from_version)
+ {
+   int error;
+   size_t size_adr;
++  size_t hi_adr = 0;
+   Dwg_Section_Type sec_id;
+   BITCODE_RLL address;
+   SINCE (R_2004a)
+@@ -2101,6 +2122,7 @@ encode_header_vars (Dwg_Data *restrict dwg, Bit_Chain *restrict dat,
+     if (dwg->header.maint_version > 3 || dat->version >= R_2018)
+       {
+         bitsize_hi_adr = dat->byte;
++        hi_adr = bitsize_hi_adr;
+         bit_write_RL (dat, 0); // bitsize_hi placeholder
+       }
+     bitsize_adr = dat->byte;
+@@ -2185,7 +2207,10 @@ encode_header_vars (Dwg_Data *restrict dwg, Bit_Chain *restrict dat,
+       dat->from_version = orig_from_version;
+   }
+ 
+-  encode_patch_RLsize (dat, size_adr);
++  if (hi_adr)
++    encode_patch_RLsize_hi (dat, size_adr, hi_adr);
++  else
++    encode_patch_RLsize (dat, size_adr);
+   bit_write_CRC (dat, size_adr, 0xC0C1);
+   write_sentinel (dat, DWG_SENTINEL_VARIABLE_END);
+   address = dwg->header.section[0].address;
+@@ -2381,7 +2406,10 @@ encode_classes (Dwg_Data *restrict dwg, Bit_Chain *restrict dat)
+   /* Patch the section size at its beginning
+    */
+   assert (size_adr);
+-  encode_patch_RLsize (dat, size_adr);
++  if (hsize_adr)
++    encode_patch_RLsize_hi (dat, size_adr, hsize_adr);
++  else
++    encode_patch_RLsize (dat, size_adr);
+   bit_write_CRC (dat, size_adr, 0xC0C1);
+   write_sentinel (dat, DWG_SENTINEL_CLASS_END);
+   dwg->header.section[sec_id].size

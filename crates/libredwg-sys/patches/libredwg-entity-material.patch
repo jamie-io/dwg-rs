@@ -1,0 +1,24 @@
+Since 76cf0d750 (GH #1436) the R2007+ entity material flags come before the
+plot style flags, so an explicit material is LibreDWG's `material` handle in
+both directions. Without DEBUG_CLASSES the encoder still sets every
+material_flags 3 to 0 ("Disabling MATERIAL handle"), because MATERIALs from
+DXF imports are replaced by placeholders (encode.c). The MATERIALs of a
+drawing built with the add API are kept (add-mesh-material patch), so their
+entity handles are kept too.
+
+diff --git a/src/common_entity_data.spec b/src/common_entity_data.spec
+index 10dd702..e24efc7 100644
+--- a/src/common_entity_data.spec
++++ b/src/common_entity_data.spec
+@@ -517,7 +517,10 @@
+     {
+ #ifndef DEBUG_CLASSES
+ #ifdef IS_ENCODER
+-      if (FIELD_VALUE (material_flags) == 3)
++      // MATERIALs made by the add API are complete, so their handles are
++      // kept (encode.c keeps the objects, see DWG_OPTS_ADDAPI)
++      if (FIELD_VALUE (material_flags) == 3
++          && !(dwg->opts & DWG_OPTS_ADDAPI))
+         {
+           LOG_WARN ("Disabling MATERIAL handle\n");
+             FIELD_VALUE (material_flags) = 0;

@@ -1,0 +1,3 @@
+crates/libredwg-sys/libredwg/** linguist-vendored
+crates/libredwg-sys/src/bindings.rs linguist-generated
+crates/libredwg-sys/src/bindings_wasm32.rs linguist-generated

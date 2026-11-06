@@ -1,0 +1,20 @@
+The common entity handles of an embedded MTEXT (ATTRIB, ATTDEF,
+GEOPOSITIONMARKER since R2010) read num_reactors handles without checking
+the end of the handle stream. A corrupt num_reactors (up to 2^32) then reads
+past the end billions of times, each logging an error: the decoder hangs.
+Stop at the first handle that cannot be read.
+
+diff --git a/src/dwg_spec_shared.h b/src/dwg_spec_shared.h
+index d720a4f..9b8a98f 100644
+--- a/src/dwg_spec_shared.h
++++ b/src/dwg_spec_shared.h
+@@ -740,7 +740,8 @@ free_3dsolid (Dwg_Object *restrict obj, Dwg_Entity_3DSOLID *restrict _obj)
+                (BITCODE_BL)SUB_FIELD_VALUE (mtext,          \
+                                            num_reactors);    \
+            vcount++)                                         \
+-        bit_read_H (hdl_dat, &htmp); /* reactors */          \
++        if (bit_read_H (hdl_dat, &htmp)) /* reactors */      \
++          break; /* end of the handle stream */              \
+     }                                                        \
+   SINCE (R_2004a)                                            \
+     {                                                        \

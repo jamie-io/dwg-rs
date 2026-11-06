@@ -1,0 +1,58 @@
+EXTRUDEDSURFACE, LOFTEDSURFACE, REVOLVEDSURFACE and SWEPTSURFACE are
+debugging classes: without DEBUG_CLASSES LibreDWG keeps them as UNKNOWN_ENT
+and leaves their data undecoded. R14 to R2010 drawings keep the surface's
+ACIS data inside the entity (R2013+ in the AcDs section), so it was lost.
+Decode these four as unstable classes, reading only the ACIS data
+(ACTION_3DSOLID) and the handles; the full specs, whose later fields are
+still unsure, stay behind DEBUG_CLASSES (free.c uses them in every build).
+
+diff --git a/src/classes.inc b/src/classes.inc
+index 9533546..eb02b7d 100644
+--- a/src/classes.inc
++++ b/src/classes.inc
+@@ -379,10 +379,12 @@
+ 
+   DEBUGGING_CLASS_DXF (ACTION, GEOPOSITIONMARKER, POSITIONMARKER) /* ent, yet unsorted. no coverage */
+   DEBUGGING_CLASS     (ACTION, NURBSURFACE)       /* ent */
+-  DEBUGGING_CLASS     (ACTION, EXTRUDEDSURFACE)   /* ent */
+-  DEBUGGING_CLASS     (ACTION, LOFTEDSURFACE)     /* ent */
+-  DEBUGGING_CLASS     (ACTION, REVOLVEDSURFACE)   /* ent */
+-  DEBUGGING_CLASS     (ACTION, SWEPTSURFACE)      /* ent */
++  // dwg2gltf: decoded up to their ACIS data (see dwg2.spec), which R14 to
++  // R2010 keep inside the entity
++  UNSTABLE_CLASS      (ACTION, EXTRUDEDSURFACE)   /* ent */
++  UNSTABLE_CLASS      (ACTION, LOFTEDSURFACE)     /* ent */
++  UNSTABLE_CLASS      (ACTION, REVOLVEDSURFACE)   /* ent */
++  UNSTABLE_CLASS      (ACTION, SWEPTSURFACE)      /* ent */
+   UNSTABLE_CLASS_DXF (ACTION, TABLE, ACAD_TABLE) /* ent, r2010+ needs subclassing */
+   DEBUGGING_CLASS     (ACTION, ARCALIGNEDTEXT)    // ent expresstools
+   DEBUGGING_CLASS     (ACTION, RTEXT)             // ent expresstools
+diff --git a/src/dwg2.spec b/src/dwg2.spec
+index 69abfc2..d0f8e01 100644
+--- a/src/dwg2.spec
++++ b/src/dwg2.spec
+@@ -4611,6 +4611,24 @@ DWG_OBJECT_END
+ 
+ #endif /* DEBUG_CLASS || IS_FREE */
+ 
++#if !defined (DEBUG_CLASSES) && !defined (IS_FREE)
++/* dwg2gltf: the procedural surfaces, read up to their ACIS data only.
++   R14 to R2010 keep it inline (R2013+ in the AcDs section); the fields
++   after it are still being worked out (see the DEBUG_CLASSES versions
++   above, which free.c uses for all builds). */
++#  define ACIS_ONLY_SURFACE(token)                                            \
++  DWG_ENTITY (token)                                                          \
++    HANDLE_UNKNOWN_BITS;                                                      \
++    ACTION_3DSOLID;                                                           \
++    COMMON_ENTITY_HANDLE_DATA;                                                \
++  DWG_ENTITY_END
++ACIS_ONLY_SURFACE (EXTRUDEDSURFACE)
++ACIS_ONLY_SURFACE (LOFTEDSURFACE)
++ACIS_ONLY_SURFACE (REVOLVEDSURFACE)
++ACIS_ONLY_SURFACE (SWEPTSURFACE)
++#  undef ACIS_ONLY_SURFACE
++#endif
++
+ DWG_OBJECT (DATALINK)
+   HANDLE_UNKNOWN_BITS;
+   SUBCLASS (AcDbDataLink);

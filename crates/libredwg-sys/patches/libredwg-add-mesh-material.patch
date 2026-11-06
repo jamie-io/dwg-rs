@@ -1,0 +1,534 @@
+diff --git a/include/dwg.h b/include/dwg.h
+index 547ad93..4530d96 100644
+--- a/include/dwg.h
++++ b/include/dwg.h
+@@ -11526,6 +11526,8 @@ typedef struct _dwg_struct
+ #define DWG_OPTS_INDXF    0x40
+ #define DWG_OPTS_INJSON   0x80
+ #define DWG_OPTS_IN       (DWG_OPTS_INDXF | DWG_OPTS_INJSON)
++/* Built with dwg_add_Document. Only in dwg->opts, not in Bit_Chain.opts */
++#define DWG_OPTS_ADDAPI   0x100
+ 
+ typedef enum RESBUF_VALUE_TYPE
+ {
+diff --git a/include/dwg_api.h b/include/dwg_api.h
+index 12edf7a..0549494 100644
+--- a/include/dwg_api.h
++++ b/include/dwg_api.h
+@@ -9794,6 +9794,33 @@ extern "C"
+   EXPORT Dwg_Object_XRECORD *
+   dwg_add_XRECORD_handle (Dwg_Object_XRECORD *restrict _obj, const short dxf,
+                           const Dwg_Handle hdl) __nonnull_all;
++  /* size bytes of data as binary chunks of at most chunk (<= 255) bytes */
++  EXPORT Dwg_Object_XRECORD *
++  dwg_add_XRECORD_chunks (Dwg_Object_XRECORD *restrict _obj, const short dxf,
++                          const size_t size, const BITCODE_RC *restrict data,
++                          const unsigned chunk) __nonnull_all;
++  /* num reals, value i with group code dxfs[i % num_dxfs] */
++  EXPORT Dwg_Object_XRECORD *
++  dwg_add_XRECORD_reals (Dwg_Object_XRECORD *restrict _obj,
++                         const unsigned num_dxfs, const short *restrict dxfs,
++                         const size_t num,
++                         const double *restrict values) __nonnull_all;
++  /* The extension dictionary of an entity or object, created on first use */
++  EXPORT Dwg_Object_DICTIONARY *
++  dwg_add_xdictionary (const void *restrict _owner) __nonnull_all;
++
++  /* AcDbSubDMesh (r2010+) as its level 0 cage. faces is the DXF 90 list: per
++     face the number of vertices, then their indices. Edges are derived. */
++  EXPORT Dwg_Entity_MESH *
++  dwg_add_MESH (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
++                const unsigned num_vertex, const dwg_point_3d *restrict verts,
++                const unsigned num_faces,
++                const BITCODE_BL *restrict faces) __nonnull_all;
++  /* A MATERIAL object (r2007+) in ACAD_MATERIAL, which is created on first
++     use with its ByLayer, ByBlock and Global materials. */
++  EXPORT Dwg_Object_MATERIAL *
++  dwg_add_MATERIAL (Dwg_Data *restrict dwg,
++                    const char *restrict name) __nonnull_all;
+ 
+   EXPORT Dwg_Object_PLACEHOLDER *
+   dwg_add_PLACEHOLDER (Dwg_Data *restrict dwg) __nonnull_all;
+@@ -10196,9 +10223,7 @@ extern "C"
+ #define HAVE_NO_DWG_ADD_LOFTEDSURFACE
+ #define HAVE_NO_DWG_ADD_LONG_TRANSACTION
+ #define HAVE_NO_DWG_ADD_LTYPE_CONTROL
+-#define HAVE_NO_DWG_ADD_MATERIAL
+ #define HAVE_NO_DWG_ADD_MENTALRAYRENDERSETTINGS
+-#define HAVE_NO_DWG_ADD_MESH
+ #define HAVE_NO_DWG_ADD_MLEADEROBJECTCONTEXTDATA
+ #define HAVE_NO_DWG_ADD_MLEADERSTYLE
+ #define HAVE_NO_DWG_ADD_MOTIONPATH
+diff --git a/src/dwg_api.c b/src/dwg_api.c
+index 8b2c270..46138bf 100644
+--- a/src/dwg_api.c
++++ b/src/dwg_api.c
+@@ -24969,7 +24969,7 @@ dwg_add_Document (Dwg_Data *restrict dwg, const int imperial)
+   // not convert them again. INJSON would make bit_write_TV treat the
+   // already-converted TV bytes as UTF-8 (double conversion, GH #1499).
+   if (version >= R_13b1)
+-    dwg->opts |= DWG_OPTS_INDXF;
++    dwg->opts |= DWG_OPTS_INDXF | DWG_OPTS_ADDAPI;
+   dwg->dirty_refs = 0;
+ 
+   if (!dwg->object_map)
+@@ -28721,8 +28721,13 @@ dwg_add_XRECORD (Dwg_Object_DICTIONARY *restrict dict,
+       REQUIRE_CLASS ("XRECORD");
+   }
+   {
++    /* NEW_OBJECT may move dictobj */
++    const BITCODE_RLL dict_ref = dictobj->handle.value;
+     API_ADD_OBJECT (XRECORD);
+     _obj->cloning = dict->cloning;
++    /* owner is relative, reactor absolute */
++    obj->tio.object->ownerhandle = dwg_add_handleref (dwg, 4, dict_ref, obj);
++    add_obj_reactor (obj->tio.object, dict_ref);
+     // find the key in the dict, and set the handle. or add it
+     dwg_add_DICTIONARY_item (dict, key, obj->handle.value);
+     return _obj;
+@@ -31246,4 +31251,331 @@ dwg_add_WIPEOUTVARIABLES (Dwg_Data *dwg /* ... */)
+ // XREFPANELOBJECT
+ // XYPARAMETERENTITY
+ 
++/* Appends to an XRECORD in bulk: dwg_add_XRECORD_* walk the whole resbuf
++   chain for every value. */
++static Dwg_Resbuf *
++xrecord_append (Dwg_Object_XRECORD *_obj, Dwg_Resbuf **tail)
++{
++  Dwg_Resbuf *rbuf = (Dwg_Resbuf *)calloc (1, sizeof (Dwg_Resbuf));
++  if (!rbuf)
++    return NULL;
++  if (*tail)
++    (*tail)->nextrb = rbuf;
++  else
++    _obj->xdata = rbuf;
++  *tail = rbuf;
++  _obj->num_xdata++;
++  return rbuf;
++}
++
++/* size bytes of data as consecutive binary chunks of at most chunk bytes
++   (1 to 255, a single RC length each). */
++EXPORT Dwg_Object_XRECORD *
++dwg_add_XRECORD_chunks (Dwg_Object_XRECORD *restrict _obj, const short dxf,
++                        const size_t size, const BITCODE_RC *restrict data,
++                        const unsigned chunk)
++{
++  Dwg_Resbuf *tail;
++  size_t pos;
++  CHECK_XRECORD;
++  if (chunk < 1 || chunk > 255)
++    {
++      LOG_ERROR ("%s: invalid chunk size %u", __FUNCTION__, chunk);
++      return NULL;
++    }
++  tail = rbuf_last (_obj->xdata);
++  for (pos = 0; pos < size; pos += chunk)
++    {
++      const unsigned len
++          = size - pos < chunk ? (unsigned)(size - pos) : chunk;
++      Dwg_Resbuf *rbuf = xrecord_append (_obj, &tail);
++      if (!rbuf || !(rbuf->value.str.u.data = (char *)malloc (len)))
++        {
++          LOG_ERROR ("%s: Out of memory", __FUNCTION__);
++          return NULL;
++        }
++      rbuf->type = dxf;
++      rbuf->value.str.size = len;
++      memcpy (rbuf->value.str.u.data, &data[pos], len);
++      _obj->xdata_size += 3 + len; // 2 + 1 + len
++    }
++  return _obj;
++}
++
++/* num reals, value i with group code dxfs[i % num_dxfs] (e.g. 40, 41, 42 per
++   vertex normal). */
++EXPORT Dwg_Object_XRECORD *
++dwg_add_XRECORD_reals (Dwg_Object_XRECORD *restrict _obj,
++                       const unsigned num_dxfs, const short *restrict dxfs,
++                       const size_t num, const double *restrict values)
++{
++  Dwg_Resbuf *tail;
++  size_t i;
++  CHECK_XRECORD;
++  if (!num_dxfs)
++    return NULL;
++  tail = rbuf_last (_obj->xdata);
++  for (i = 0; i < num; i++)
++    {
++      Dwg_Resbuf *rbuf = xrecord_append (_obj, &tail);
++      if (!rbuf)
++        {
++          LOG_ERROR ("%s: Out of memory", __FUNCTION__);
++          return NULL;
++        }
++      rbuf->type = dxfs[i % num_dxfs];
++      rbuf->value.dbl = values[i];
++      _obj->xdata_size += 10; // 2 + 8
++    }
++  return _obj;
++}
++
++/* The extension dictionary of an entity or object, created on first use. */
++EXPORT Dwg_Object_DICTIONARY *
++dwg_add_xdictionary (const void *restrict _owner)
++{
++  int error;
++  Dwg_Object *owner = dwg_obj_generic_to_object (_owner, &error);
++  Dwg_Data *dwg = owner && !error ? owner->parent : NULL;
++  BITCODE_BL owner_index;
++  BITCODE_RLL owner_ref;
++  BITCODE_H xdic;
++  Dwg_Object_DICTIONARY *dict;
++  Dwg_Object *dictobj;
++  if (!dwg)
++    {
++      LOG_ERROR ("%s: no object", __FUNCTION__);
++      return NULL;
++    }
++  xdic = owner->supertype == DWG_SUPERTYPE_ENTITY
++             ? owner->tio.entity->xdicobjhandle
++             : owner->tio.object->xdicobjhandle;
++  if (xdic && xdic->absolute_ref)
++    {
++      Dwg_Object *o = dwg_ref_object (dwg, xdic);
++      return o && o->fixedtype == DWG_TYPE_DICTIONARY
++                 ? o->tio.object->tio.DICTIONARY
++                 : NULL;
++    }
++  /* dwg_add_DICTIONARY may move the owner */
++  owner_index = owner->index;
++  owner_ref = owner->handle.value;
++  dict = dwg_add_DICTIONARY (dwg, NULL, NULL, 0);
++  if (!dict)
++    return NULL;
++  owner = &dwg->object[owner_index];
++  dictobj = dwg_obj_generic_to_object (dict, &error);
++  dictobj->tio.object->ownerhandle
++      = dwg_add_handleref (dwg, 4, owner_ref, dictobj);
++  dict->is_hardowner = 1;
++  xdic = dwg_add_handleref (dwg, 3, dictobj->handle.value, owner);
++  if (owner->supertype == DWG_SUPERTYPE_ENTITY)
++    {
++      owner->tio.entity->xdicobjhandle = xdic;
++      owner->tio.entity->is_xdic_missing = 0;
++    }
++  else
++    {
++      owner->tio.object->xdicobjhandle = xdic;
++      owner->tio.object->is_xdic_missing = 0;
++    }
++  return dict;
++}
++
++static int
++mesh_edge_cmp (const void *a, const void *b)
++{
++  const uint64_t x = *(const uint64_t *)a;
++  const uint64_t y = *(const uint64_t *)b;
++  return x < y ? -1 : x > y;
++}
++
++/* AcDbSubDMesh as its level 0 cage. faces is the DXF 90 list: per face the
++   number of vertices, then their indices. The edges are derived from the
++   faces, all with crease 0. */
++EXPORT Dwg_Entity_MESH *
++dwg_add_MESH (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
++              const unsigned num_vertex, const dwg_point_3d *restrict verts,
++              const unsigned num_faces, const BITCODE_BL *restrict faces)
++{
++  uint64_t *keys;
++  unsigned num_keys = 0, num_edges = 0, i, j;
++  {
++    int err;
++    Dwg_Object *hdr = dwg_obj_generic_to_object (blkhdr, &err);
++    Dwg_Data *dwg = hdr ? hdr->parent : NULL;
++    if (dwg && dwg->header.version < R_2010)
++      {
++        LOG_ERROR ("Invalid entity %s <r2010", "MESH");
++        return NULL;
++      }
++    if (dwg)
++      REQUIRE_CLASS ("MESH");
++  }
++  for (i = 0; i < num_faces; i += faces[i] + 1)
++    {
++      if (faces[i] < 3 || faces[i] > num_faces - i - 1)
++        {
++          LOG_ERROR ("%s: invalid face at %u", __FUNCTION__, i);
++          return NULL;
++        }
++      for (j = 1; j <= faces[i]; j++)
++        if (faces[i + j] >= num_vertex)
++          {
++            LOG_ERROR ("%s: invalid vertex index at %u", __FUNCTION__, i + j);
++            return NULL;
++          }
++      num_keys += faces[i];
++    }
++  keys = (uint64_t *)malloc ((num_keys ? num_keys : 1) * sizeof (uint64_t));
++  if (!keys)
++    return NULL;
++  num_keys = 0;
++  for (i = 0; i < num_faces; i += faces[i] + 1)
++    for (j = 1; j <= faces[i]; j++)
++      {
++        const uint64_t a = faces[i + j];
++        const uint64_t b = faces[i + (j % faces[i]) + 1];
++        keys[num_keys++] = a < b ? a << 32 | b : b << 32 | a;
++      }
++  qsort (keys, num_keys, sizeof (uint64_t), mesh_edge_cmp);
++  for (i = 0; i < num_keys; i++)
++    if (!num_edges || keys[i] != keys[num_edges - 1])
++      keys[num_edges++] = keys[i];
++  {
++    API_ADD_ENTITY (MESH);
++    _obj->dlevel = 2;
++    _obj->is_watertight = 0;
++    _obj->num_subdiv_vertex = 0; /* the subdivision level */
++    _obj->num_vertex = num_vertex;
++    _obj->vertex = (BITCODE_3DPOINT *)calloc (num_vertex ? num_vertex : 1,
++                                              sizeof (BITCODE_3DPOINT));
++    _obj->num_faces = num_faces;
++    _obj->faces = (BITCODE_BL *)calloc (num_faces ? num_faces : 1,
++                                        sizeof (BITCODE_BL));
++    _obj->num_edges = num_edges;
++    _obj->edges = (Dwg_MESH_edge *)calloc (num_edges ? num_edges : 1,
++                                           sizeof (Dwg_MESH_edge));
++    _obj->num_crease = num_edges;
++    _obj->crease = (BITCODE_BD *)calloc (num_edges ? num_edges : 1,
++                                         sizeof (BITCODE_BD));
++    if (!_obj->vertex || !_obj->faces || !_obj->edges || !_obj->crease)
++      {
++        LOG_ERROR ("%s: Out of memory", __FUNCTION__);
++        free (keys);
++        API_UNADD_ENTITY;
++        return NULL;
++      }
++    for (i = 0; i < num_vertex; i++)
++      {
++        _obj->vertex[i].x = verts[i].x;
++        _obj->vertex[i].y = verts[i].y;
++        _obj->vertex[i].z = verts[i].z;
++      }
++    memcpy (_obj->faces, faces, num_faces * sizeof (BITCODE_BL));
++    for (i = 0; i < num_edges; i++)
++      {
++        _obj->edges[i].parent = _obj;
++        _obj->edges[i].idxfrom = (BITCODE_BL)(keys[i] >> 32);
++        _obj->edges[i].idxto = (BITCODE_BL)(keys[i] & 0xFFFFFFFF);
++      }
++    free (keys);
++    _obj->unknown_b1 = 1;
++    _obj->unknown_b2 = 0;
++    return _obj;
++  }
++}
++
++static void
++material_defaults (Dwg_Data *restrict dwg, Dwg_Object_MATERIAL *restrict _obj)
++{
++  Dwg_MATERIAL_mapper *maps[]
++      = { &_obj->diffusemap,   &_obj->specularmap, &_obj->reflectionmap,
++          &_obj->opacitymap,   &_obj->bumpmap,     &_obj->refractionmap };
++  _obj->ambient_color.factor = 1.0;
++  _obj->diffuse_color.factor = 1.0;
++  _obj->specular_color.factor = 1.0;
++  _obj->specular_gloss_factor = 0.5;
++  _obj->opacity_percent = 1.0;
++  _obj->refraction_index = 1.0;
++  _obj->channel_flags = 127;
++  for (unsigned i = 0; i < sizeof (maps) / sizeof (maps[0]); i++)
++    {
++      Dwg_MATERIAL_mapper *map = maps[i];
++      map->blendfactor = 1.0;
++      map->source = 1;
++      map->projection = 1;
++      map->tiling = 1;
++      map->autotransform = 1;
++      map->filename = dwg_add_u8_input (dwg, "");
++      map->transmatrix = (BITCODE_BD *)calloc (16, sizeof (BITCODE_BD));
++      if (map->transmatrix)
++        for (unsigned k = 0; k < 16; k += 5)
++          map->transmatrix[k] = 1.0;
++    }
++}
++
++/* Adds a MATERIAL object to the ACAD_MATERIAL dictionary */
++static Dwg_Object_MATERIAL *
++add_material (Dwg_Data *restrict dwg, Dwg_Object_DICTIONARY *restrict dict,
++              const BITCODE_RLL dict_ref, const char *restrict name)
++{
++  API_ADD_OBJECT (MATERIAL);
++  _obj->name = dwg_add_u8_input (dwg, name);
++  _obj->description = dwg_add_u8_input (dwg, "");
++  material_defaults (dwg, _obj);
++  /* owner is relative, reactor absolute */
++  obj->tio.object->ownerhandle = dwg_add_handleref (dwg, 4, dict_ref, obj);
++  add_obj_reactor (obj->tio.object, dict_ref);
++  dwg_add_DICTIONARY_item (dict, name, obj->handle.value);
++  return _obj;
++}
++
++/* A MATERIAL object (r2007+), with the ACAD_MATERIAL dictionary and its
++   ByLayer, ByBlock and Global materials created on first use. Callers set
++   the colors and maps. */
++EXPORT Dwg_Object_MATERIAL *
++dwg_add_MATERIAL (Dwg_Data *restrict dwg, const char *restrict name)
++{
++  Dwg_Object_DICTIONARY *dict = NULL;
++  Dwg_Object *dictobj;
++  BITCODE_RLL dict_ref;
++  int error;
++  if (dwg->header.version < R_2007)
++    {
++      LOG_ERROR ("Invalid object %s <r2007", "MATERIAL");
++      return NULL;
++    }
++  REQUIRE_CLASS ("MATERIAL");
++  for (BITCODE_BS i = 0; i < dwg->num_classes; i++)
++    if (dwg->dwg_class[i].dxfname
++        && strEQc (dwg->dwg_class[i].dxfname, "MATERIAL"))
++      dwg->dwg_class[i].proxyflag = 1153; /* as AutoCAD writes it */
++  if (dwg->header_vars.DICTIONARY_MATERIAL
++      && dwg->header_vars.DICTIONARY_MATERIAL->absolute_ref)
++    {
++      dictobj = dwg_ref_object (dwg, dwg->header_vars.DICTIONARY_MATERIAL);
++      if (dictobj && dictobj->fixedtype == DWG_TYPE_DICTIONARY)
++        dict = dictobj->tio.object->tio.DICTIONARY;
++    }
++  if (!dict)
++    {
++      Dwg_Object_MATERIAL *bylayer;
++      dict = dwg_add_DICTIONARY (dwg, "ACAD_MATERIAL", NULL, 0);
++      if (!dict)
++        return NULL;
++      dict_ref = dwg_obj_generic_to_object (dict, &error)->handle.value;
++      dwg->header_vars.DICTIONARY_MATERIAL
++          = dwg_add_handleref (dwg, 5, dict_ref, NULL);
++      add_material (dwg, dict, dict_ref, "ByBlock");
++      bylayer = add_material (dwg, dict, dict_ref, "ByLayer");
++      add_material (dwg, dict, dict_ref, "Global");
++      dwg->header_vars.CMATERIAL = dwg_add_handleref (
++          dwg, 5, dwg_obj_generic_to_object (bylayer, &error)->handle.value,
++          NULL);
++    }
++  dict_ref = dwg_obj_generic_to_object (dict, &error)->handle.value;
++  return add_material (dwg, dict, dict_ref, name);
++}
++
+ // #endif /* USE_WRITE */
+diff --git a/src/enc_macros.h b/src/enc_macros.h
+index de48f6c..1a0d121 100644
+--- a/src/enc_macros.h
++++ b/src/enc_macros.h
+@@ -438,8 +438,12 @@
+     LOG_POS                                                                   \
+   }
+ 
++/* Real files have far bigger vectors (MESH faces of 115866 BL), so the
++   sanity bound is ENC_MAX_COUNT, not 0xff00 */
++#define ENC_MAX_COUNT 0x1000000L
+ #define OVERFLOW_CHECK(nam, size)                                             \
+-  if ((long)(size) > 0xff00L || (!_obj->nam && size) || (_obj->nam && !size)) \
++  if ((long)(size) > ENC_MAX_COUNT || (!_obj->nam && size)                    \
++      || (_obj->nam && !size))                                                \
+     {                                                                         \
+       LOG_ERROR ("Invalid " #nam " %ld", (long)size);                         \
+       return DWG_ERR_VALUEOUTOFBOUNDS;                                        \
+@@ -452,7 +456,8 @@
+       return DWG_ERR_VALUEOUTOFBOUNDS;                                        \
+     }
+ #define OVERFLOW_NULL_CHECK_LV(nam, size)                                     \
+-  if ((size) > MAX_NUM || (!_obj->nam && size) || (_obj->nam && !size))       \
++  if ((long)(size) > ENC_MAX_COUNT || (!_obj->nam && size)                    \
++      || (_obj->nam && !size))                                                \
+     {                                                                         \
+       LOG_ERROR ("Invalid " #nam " %ld, set to 0", (long)size);               \
+       size = 0;                                                               \
+diff --git a/src/encode.c b/src/encode.c
+index 03bff85..ba022dd 100644
+--- a/src/encode.c
++++ b/src/encode.c
+@@ -2870,13 +2870,15 @@ dwg_encode (Dwg_Data *restrict dwg, Bit_Chain *restrict dat)
+           Dwg_Object *obj = &dwg->object[i];
+           if (obj->fixedtype == DWG_TYPE_UNKNOWN_OBJ
+               || obj->fixedtype == DWG_TYPE_UNKNOWN_ENT
+-          // WIPEOUT causes hang, TABLEGEOMETRY crash, MATERIAL causes ODA
+-          // errors. Keep same-version JSON imports untouched.
++          // WIPEOUT causes hang, TABLEGEOMETRY crash, MATERIAL from DXF
++          // causes ODA errors. Keep same-version JSON imports and
++          // dwg_add_MATERIAL objects (complete, not from DXF) untouched.
+ #  ifndef DEBUG_CLASSES
+               || (dwg->opts & DWG_OPTS_INDXF
+                   && (/*obj->fixedtype == DWG_TYPE_WIPEOUT (GH #244) || */
+                       obj->fixedtype == DWG_TYPE_TABLEGEOMETRY
+-                      || obj->fixedtype == DWG_TYPE_MATERIAL))
++                      || (obj->fixedtype == DWG_TYPE_MATERIAL
++                          && !(dwg->opts & DWG_OPTS_ADDAPI))))
+ #  endif
+           )
+             {
+@@ -2912,7 +2914,8 @@ dwg_encode (Dwg_Data *restrict dwg, Bit_Chain *restrict dat)
+                           && (/*obj->fixedtype == DWG_TYPE_WIPEOUT (GH #244) ||
+                                */
+                               obj->fixedtype == DWG_TYPE_TABLEGEOMETRY
+-                              || obj->fixedtype == DWG_TYPE_MATERIAL))
++                              || (obj->fixedtype == DWG_TYPE_MATERIAL
++                                  && !(dwg->opts & DWG_OPTS_ADDAPI))))
+ #  endif
+                   )
+                     {
+@@ -6568,11 +6571,12 @@ dwg_encode_add_object (Dwg_Object *restrict obj, Bit_Chain *restrict dat,
+           LOG_INFO (
+               "overlarge MS size %lu > 0x7fff (was %lu) @%" PRIuSIZE "\n",
+               (unsigned long)obj->size, (unsigned long)old_size, dat->byte);
+-          if (dat->byte + obj->size + 5 > dat->size)
+-            bit_chain_alloc_size (dat,
+-                                  (dat->byte + obj->size + 5) - dat->size);
+-          memmove (&dat->chain[dat->byte + 2], &dat->chain[dat->byte],
+-                   obj->size + 3);
++          /* the size and handle stream size fields plus the data (the
++             UMC placeholder for 0 takes 4 bytes, not 1) */
++          const size_t moved = obj->address - dat->byte + obj->size + 1;
++          if (dat->byte + moved + 2 > dat->size)
++            bit_chain_alloc_size (dat, (dat->byte + moved + 2) - dat->size);
++          memmove (&dat->chain[dat->byte + 2], &dat->chain[dat->byte], moved);
+           // obj->size += 2;
+           // obj->bitsize += 16;
+           obj->address += 2;
+@@ -6590,7 +6594,7 @@ dwg_encode_add_object (Dwg_Object *restrict obj, Bit_Chain *restrict dat,
+             bit_chain_alloc_size (dat,
+                                   (dat->byte + obj->size + 5) - dat->size);
+           memmove (&dat->chain[dat->byte], &dat->chain[dat->byte + 2],
+-                   obj->size + 3);
++                   obj->address - dat->byte - 2 + obj->size + 1);
+           // obj->size -= 2;
+           // obj->bitsize -= 16;
+           obj->address -= 2;
+diff --git a/src/spec.h b/src/spec.h
+index dc6bc4d..2fa01e1 100644
+--- a/src/spec.h
++++ b/src/spec.h
+@@ -821,9 +821,10 @@
+ #  define REPEAT_CN(times, name, type)                                        \
+     if (_obj->name != NULL)                                                   \
+       for (rcount1 = 0; rcount1 < (BITCODE_BL)times; rcount1++)
+-// checked with constant times
++// checked with constant times (bound as in enc_macros.h: real MESHes have
++// 47596 edges, more than the former 20000)
+ #  define REPEAT_N(times, name, type)                                         \
+-    if (dat->version >= R_2000 && (BITCODE_BL)times > 20000)                  \
++    if (dat->version >= R_2000 && (BITCODE_BL)times > 0x1000000)                  \
+       {                                                                       \
+         LOG_ERROR ("Invalid %s." #name " rcount1 %ld", SAFEDXFNAME,           \
+                    (long)times);                                              \
+@@ -834,7 +835,7 @@
+ 
+ // checked with var. times
+ #  define _REPEAT(times, name, type, idx)                                     \
+-    if (dat->version >= R_2000 && (BITCODE_BL)_obj->times > 20000)            \
++    if (dat->version >= R_2000 && (BITCODE_BL)_obj->times > 0x1000000)            \
+       {                                                                       \
+         LOG_ERROR ("Invalid %s." #name " rcount" #idx " %ld", SAFEDXFNAME,    \
+                    (long)_obj->times);                                        \

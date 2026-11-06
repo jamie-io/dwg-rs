@@ -1,0 +1,39 @@
+# Rust build output
+target/
+
+# Python: QA tools and BricsCAD test scripts
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# three.js loader: the WebAssembly module (scripts/build-wasm.sh) and npm
+# dependencies
+packages/three-dwg-loader/wasm/
+node_modules/
+
+# local sample drawings, their conversions and QA runs: kept out of git
+samples/
+
+# LibreDWG's decoder specs are sources, even where a global ignore file
+# excludes *.spec (PyInstaller)
+!crates/libredwg-sys/libredwg/src/*.spec
+
+# local environment, logs, editors and OS files
+.env
+.envrc
+*.log
+*.so
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# vendored crates are committed whole (their checksums cover every file);
+# keep this last so no rule above drops a file from vendor/
+!vendor/**

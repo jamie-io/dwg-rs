@@ -1,0 +1,14 @@
+[package]
+name = "libredwg-sys"
+description = "LibreDWG 0.14 decoder, vendored and statically linked (bindings for dwg2gltf)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+links = "redwg"
+readme = "README.md"
+publish = false
+
+[build-dependencies]
+cc = "1"

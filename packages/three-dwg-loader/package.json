@@ -1,0 +1,41 @@
+{
+  "name": "three-dwg-loader",
+  "version": "0.2.0",
+  "description": "three.js loader for AutoCAD DWG files (with OFML materials and ACIS solids): dwg2gltf compiled to WebAssembly",
+  "type": "module",
+  "private": true,
+  "license": "GPL-3.0-or-later",
+  "author": "Jamie Jahn",
+  "exports": {
+    ".": {
+      "types": "./src/DWGLoader.d.ts",
+      "default": "./src/DWGLoader.js"
+    },
+    "./core": {
+      "types": "./src/core.d.ts",
+      "default": "./src/core.js"
+    },
+    "./exporter": {
+      "types": "./src/DWGExporter.d.ts",
+      "default": "./src/DWGExporter.js"
+    },
+    "./worker": "./src/DWGWorker.js",
+    "./wasm": "./wasm/dwg2gltf.wasm"
+  },
+  "files": [
+    "src",
+    "wasm/dwg2gltf.wasm"
+  ],
+  "scripts": {
+    "build:wasm": "../../scripts/build-wasm.sh",
+    "test": "node --test test/*.test.js",
+    "demo": "python3 -m http.server -d . 8080"
+  },
+  "peerDependencies": {
+    "three": ">=0.160.0"
+  },
+  "devDependencies": {
+    "gltf-validator": "2.0.0-dev.3.10",
+    "three": "0.186.1"
+  }
+}

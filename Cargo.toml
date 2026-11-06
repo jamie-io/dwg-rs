@@ -1,0 +1,24 @@
+[workspace]
+members = ["crates/dwg2gltf", "crates/dwg2gltf-wasm", "crates/libredwg-sys"]
+# the WebAssembly module is built by scripts/build-wasm.sh
+default-members = ["crates/dwg2gltf", "crates/libredwg-sys"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "GPL-3.0-or-later"
+authors = ["Jamie Jahn"]
+
+# LibreDWG and the tessellator are slow unoptimised; keep debug builds and
+# the tests usable.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package.libredwg-sys]
+opt-level = 2
+
+[profile.release]
+lto = true
+codegen-units = 1
