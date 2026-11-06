@@ -180,6 +180,11 @@ DWG_WASM=wasm/dwg2gltf.dev.wasm npm test   # after scripts/build-wasm.sh --dev (
 
 The demo also loads URLs: `demo/?url=/path/to/file.dwg`.
 
+The public demo site (GitHub Pages: the page in `pages/`, the loader, the
+module, three.js and a gallery of the BricsCAD test drawings with
+thumbnails rendered in headless Chrome) is built with
+`scripts/build-pages.sh <out-dir>`.
+
 The tests convert a generated series DWG
 (`crates/dwg2gltf/examples/series_fixture.rs`) and every DWG in a local
 `samples/` folder (not in git; or `DWG2GLTF_SAMPLES=<dir>`; the tests that
