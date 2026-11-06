@@ -1,11 +1,151 @@
 // SPDX-FileCopyrightText: 2026 Jamie Jahn
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Reading converted files back: shared by the integration tests.
+//! Shared by the integration tests: a builder of small synthetic drawings
+//! (`Doc`), reading converted files back, and a temporary folder. Other test
+//! crates can include this file with `#[path = ".../tests/common/mod.rs"] mod common;`.
 
 #![allow(dead_code)]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use dwg2gltf::dwg::{BlockHeader, Color, Data, Drawing, Entity, Handle, Layer, Object, Shape};
+use dwg2gltf::{Converter, Document, Options, Stats};
+use serde_json::{Map, Value};
+
+pub const BYLAYER: Color = Color {
+    index: Some(256),
+    rgb: None,
+};
+
+/// Builds a minimal drawing: layers "0" and "RED", and a model space.
+pub struct Doc {
+    pub drawing: Drawing,
+    pub next: Handle,
+    pub layer0: Handle,
+    pub red: Handle,
+    pub model: Handle,
+}
+
+impl Doc {
+    pub fn new(insunits: i32) -> Doc {
+        let mut doc = Doc {
+            drawing: Drawing {
+                insunits,
+                ..Drawing::default()
+            },
+            next: 0x100,
+            layer0: 0,
+            red: 0,
+            model: 0,
+        };
+        doc.layer0 = doc.add("LAYER", Data::Layer(layer("0", 0xC3000007)));
+        doc.red = doc.add("LAYER", Data::Layer(layer("RED", 0xC3000001)));
+        doc.model = doc.block("*Model_Space", [0.0; 3]);
+        doc
+    }
+
+    pub fn add(&mut self, kind: &str, data: Data) -> Handle {
+        let handle = self.next;
+        self.next += 1;
+        self.drawing.objects.push(Object {
+            handle,
+            kind: kind.into(),
+            owner: 0,
+            xdic: 0,
+            data,
+        });
+        handle
+    }
+
+    pub fn block(&mut self, name: &str, base_pt: [f64; 3]) -> Handle {
+        self.add(
+            "BLOCK_HEADER",
+            Data::BlockHeader(BlockHeader {
+                name: name.into(),
+                base_pt,
+                entities: Some(vec![]),
+                xref: None,
+            }),
+        )
+    }
+
+    pub fn get(&mut self, h: Handle) -> &mut Object {
+        self.drawing
+            .objects
+            .iter_mut()
+            .find(|o| o.handle == h)
+            .unwrap()
+    }
+
+    /// Add an entity on layer 0 with ByLayer color to a block.
+    pub fn put(&mut self, block: Handle, kind: &str, shape: Shape) -> Handle {
+        let ent = entity(self.layer0, shape);
+        self.put_entity(block, kind, ent)
+    }
+
+    pub fn put_entity(&mut self, block: Handle, kind: &str, ent: Entity) -> Handle {
+        let h = self.add(kind, Data::Entity(Box::new(ent)));
+        match &mut self.get(block).data {
+            Data::BlockHeader(b) => b.entities.as_mut().unwrap().push(h),
+            _ => unreachable!(),
+        }
+        h
+    }
+
+    pub fn entity_mut(&mut self, h: Handle) -> &mut Entity {
+        match &mut self.get(h).data {
+            Data::Entity(e) => e,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn run(self, options: Options) -> (Map<String, Value>, Stats) {
+        let doc = Document::new(self.drawing, None);
+        let (gltf, stats) = Converter::new(&doc, options).run().unwrap();
+        (gltf.document().clone(), stats)
+    }
+}
+
+pub fn layer(name: &str, rgb: u32) -> Layer {
+    Layer {
+        name: name.into(),
+        color: Color {
+            index: Some(256),
+            rgb: Some(rgb),
+        },
+        material: 0,
+        off: false,
+        frozen: false,
+    }
+}
+
+pub fn entity(layer: Handle, shape: Shape) -> Entity {
+    Entity {
+        entmode: 0,
+        invisible: false,
+        layer,
+        color: BYLAYER,
+        material_flags: 0,
+        material_refs: [0, 0],
+        has_ds_data: false,
+        thickness: 0.0,
+        extrusion: Some([0.0, 0.0, 1.0]),
+        material_mapper: None,
+        shape,
+    }
+}
+
+/// A temporary folder of this test process and thread.
+pub fn tempdir() -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "dwg2gltf-test-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
 
 /// World positions, face and line counts, and texture coordinates of a
 /// scene read back by the glTF reader.

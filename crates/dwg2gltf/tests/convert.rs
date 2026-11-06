@@ -8,138 +8,16 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use dwg2gltf::dwg::{
-    BlockHeader, Color, Data, Drawing, Entity, Handle, Layer, Material, Object, Shape, XValue,
-};
+use dwg2gltf::dwg::{Color, Data, Handle, Layer, Material, Shape, XValue};
 use dwg2gltf::geom::{bulge_points, triangulate};
 use dwg2gltf::{Converter, Document, Error, Options, Stats};
 use serde_json::{Map, Value};
 
 mod common;
-use common::{Corners, bounds, orientation_faults, read_back, world_triangles};
-
-const BYLAYER: Color = Color {
-    index: Some(256),
-    rgb: None,
+use common::{
+    BYLAYER, Corners, Doc, bounds, entity, layer, orientation_faults, read_back, tempdir,
+    world_triangles,
 };
-
-/// Builds a minimal drawing: layers "0" and "RED", and a model space.
-struct Doc {
-    drawing: Drawing,
-    next: Handle,
-    layer0: Handle,
-    red: Handle,
-    model: Handle,
-}
-
-impl Doc {
-    fn new(insunits: i32) -> Doc {
-        let mut doc = Doc {
-            drawing: Drawing {
-                insunits,
-                ..Drawing::default()
-            },
-            next: 0x100,
-            layer0: 0,
-            red: 0,
-            model: 0,
-        };
-        doc.layer0 = doc.add("LAYER", Data::Layer(layer("0", 0xC3000007)));
-        doc.red = doc.add("LAYER", Data::Layer(layer("RED", 0xC3000001)));
-        doc.model = doc.block("*Model_Space", [0.0; 3]);
-        doc
-    }
-
-    fn add(&mut self, kind: &str, data: Data) -> Handle {
-        let handle = self.next;
-        self.next += 1;
-        self.drawing.objects.push(Object {
-            handle,
-            kind: kind.into(),
-            owner: 0,
-            xdic: 0,
-            data,
-        });
-        handle
-    }
-
-    fn block(&mut self, name: &str, base_pt: [f64; 3]) -> Handle {
-        self.add(
-            "BLOCK_HEADER",
-            Data::BlockHeader(BlockHeader {
-                name: name.into(),
-                base_pt,
-                entities: Some(vec![]),
-                xref: None,
-            }),
-        )
-    }
-
-    fn get(&mut self, h: Handle) -> &mut Object {
-        self.drawing
-            .objects
-            .iter_mut()
-            .find(|o| o.handle == h)
-            .unwrap()
-    }
-
-    /// Add an entity on layer 0 with ByLayer color to a block.
-    fn put(&mut self, block: Handle, kind: &str, shape: Shape) -> Handle {
-        let ent = entity(self.layer0, shape);
-        self.put_entity(block, kind, ent)
-    }
-
-    fn put_entity(&mut self, block: Handle, kind: &str, ent: Entity) -> Handle {
-        let h = self.add(kind, Data::Entity(Box::new(ent)));
-        match &mut self.get(block).data {
-            Data::BlockHeader(b) => b.entities.as_mut().unwrap().push(h),
-            _ => unreachable!(),
-        }
-        h
-    }
-
-    fn entity_mut(&mut self, h: Handle) -> &mut Entity {
-        match &mut self.get(h).data {
-            Data::Entity(e) => e,
-            _ => unreachable!(),
-        }
-    }
-
-    fn run(self, options: Options) -> (Map<String, Value>, Stats) {
-        let doc = Document::new(self.drawing, None);
-        let (gltf, stats) = Converter::new(&doc, options).run().unwrap();
-        (gltf.document().clone(), stats)
-    }
-}
-
-fn layer(name: &str, rgb: u32) -> Layer {
-    Layer {
-        name: name.into(),
-        color: Color {
-            index: Some(256),
-            rgb: Some(rgb),
-        },
-        material: 0,
-        off: false,
-        frozen: false,
-    }
-}
-
-fn entity(layer: Handle, shape: Shape) -> Entity {
-    Entity {
-        entmode: 0,
-        invisible: false,
-        layer,
-        color: BYLAYER,
-        material_flags: 0,
-        material_refs: [0, 0],
-        has_ds_data: false,
-        thickness: 0.0,
-        extrusion: Some([0.0, 0.0, 1.0]),
-        material_mapper: None,
-        shape,
-    }
-}
 
 fn square_face() -> Shape {
     Shape::Face3d([
@@ -595,16 +473,6 @@ fn glb_layout() {
     assert_eq!(word(24 + jlen), 0x004E4942);
     assert_eq!(js["buffers"][0]["byteLength"], word(20 + jlen));
     std::fs::remove_dir_all(dir).unwrap();
-}
-
-fn tempdir() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "dwg2gltf-test-{}-{:?}",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
 }
 
 /// A 64x64 noise PNG, which WebP stores in fewer bytes.

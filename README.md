@@ -527,13 +527,17 @@ samples/
 | `--bin PATH` | use this binary instead of `cargo build --release` |
 | `--opt ARG` | extra dwg2gltf option, part of the cache key (repeatable) |
 | `--subset N`, `--group G ...` | a fixed sample of N drawings; only these subfolders |
+| `--list FILE` | only the DWGs listed in FILE, one path per line relative to `--samples` (`#` comments allowed) |
+| `--settle SECONDS` | skip DWGs modified in the last SECONDS, for a folder that is still being filled |
+| `--group-names TSV` | display names of groups in the report and on collages, slides and failure sheets: a TSV whose first two columns are group and display name (a header line is allowed) |
 | `--skip-render`, `--skip-collage` | no Blender renders at all; no collages, slides or shots |
 | `--plugins FILE ...` | extra metrics |
 | `--workers N`, `--timeout 600` | parallel convert+compare processes (default: all cores, fewer when memory is short, about 2.5 GB each); seconds per conversion |
 | `--keep-glbs 4` | GLB cache cap in GB, `all` or `none` |
 | `--min-free-gb 12` | refuse to start with less free disk space |
 
-Limited runs (`--subset`, `--group`, `--skip-render`) do not move `latest` unless `--set-latest`.
+Limited runs (`--subset`, `--group`, `--list`, `--skip-render`, or DWGs skipped by `--settle`) do not
+move `latest` unless `--set-latest`.
 
 Every drawing is converted with the new binary, but a comparison is only computed when the GLB is new:
 results are cached by the GLB's content (`cache/compare-glb/`), so a change that touches a few drawings
@@ -565,8 +569,30 @@ the same policy to the whole cache.
 
 A regression is a worse status or a score drop of more than `--score-drop` (10). Exit code 1 when
 there are more than `--max-regressions` (0). Drawings whose DWG or reference changed are listed,
-not judged. `qa.py select` picks passing drawings for collages, slides and shots and writes
+not judged. Older `results.csv` files that call the group column `folder` are read as `group`, so
+diffs, `select` and `prune` work across them. `qa.py select` picks passing drawings for collages, slides and shots and writes
 `<out>/selection.json` (`--selection PATH` elsewhere); without that file those images are skipped.
+
+### Extra report sections
+
+A tool that wraps `qa.py` can put its own sections into `report/index.html` (after the thresholds,
+before the rows), for example a separate review of the renders:
+
+```python
+import report                                     # tools/qa/report.py
+report.build(run_dir, rows, bad, show, diff_cache, info, extra_sections=[("Review", "<p>...</p>")])
+report.add_section("runs/<id>/report/index.html", "Review", "<table>...</table>")  # after the run
+```
+
+`add_section` replaces a section with the same title (or `sid=`), so running the later step again
+does not repeat it.
+
+### Shared test helpers
+
+`crates/dwg2gltf/tests/common/mod.rs` holds the builder of small synthetic drawings (`Doc`, `layer`,
+`entity`, `BYLAYER`), `tempdir` and the read-back helpers (`read_back`, `world_triangles`,
+`orientation_faults`, `bounds`). A test crate outside this workspace that depends on `dwg2gltf` and
+`serde_json` can use them with `#[path = "<dwg-rs>/crates/dwg2gltf/tests/common/mod.rs"] mod common;`.
 
 ### Plugins
 

@@ -11,7 +11,10 @@
 Input (--samples, default samples/): DWG files directly in the folder and/or in its top-level
 subfolders ("groups"). The reference for <dir>/<stem>.dwg is <dir>/ref/<stem>.glb; DWGs without a
 reference are counted and skipped. A drawing is identified by <group>/<file> (just <file> at the
-top level); --group limits a run to some subfolders.
+top level); --group limits a run to some subfolders, --list to the DWGs listed in a file, and
+--settle N skips DWGs modified in the last N seconds (a folder that is still being filled).
+--group-names TSV gives groups display names in the report and collages. results.csv of older
+runs with a `folder` column instead of `group` is read the same way.
 
     samples/
       a.dwg   ref/a.glb
@@ -154,10 +157,33 @@ def blender_version():
 
 # --- samples ------------------------------------------------------------------------
 
+def read_list(path):
+    """Paths relative to --samples, one per line (blank lines and # comments ignored)."""
+    with open(path, encoding="utf-8") as f:
+        return {os.path.normpath(x.strip()).replace(os.sep, "/") for x in f
+                if x.strip() and not x.lstrip().startswith("#")}
+
+
+def read_group_names(path):
+    """{group: display name} from a TSV whose first two columns are group and display name. A
+    header line is allowed (it names a group that does not exist); # lines are ignored."""
+    names = {}
+    if path:
+        with open(path, encoding="utf-8", newline="") as f:
+            for row in csv.reader(f, delimiter="\t"):
+                if len(row) >= 2 and row[0].strip() and not row[0].startswith("#") and row[1].strip():
+                    names[row[0].strip()] = row[1].strip()
+    return names
+
+
 def scan(samples, a, sel_keys):
-    """DWGs in `samples` and its top-level subfolders (groups) that have <dir>/ref/<stem>.glb."""
-    items, no_ref = [], 0
+    """DWGs in `samples` and its top-level subfolders (groups) that have <dir>/ref/<stem>.glb.
+    Returns (items, DWGs without a reference, DWGs skipped by --settle)."""
+    items, no_ref, settling = [], 0, 0
     samples = os.path.abspath(samples)
+    only = read_list(a.list) if getattr(a, "list", None) else None
+    settle = getattr(a, "settle", 0) or 0
+    now = time.time()
     skip = {os.path.realpath(a.out)}
     groups = [""] + sorted(d for d in os.listdir(samples)
                            if d != "ref" and os.path.isdir(os.path.join(samples, d))
@@ -171,6 +197,11 @@ def scan(samples, a, sel_keys):
             dwg = os.path.join(folder, f)
             if ext.lower() != ".dwg" or not os.path.isfile(dwg):
                 continue
+            if only is not None and (f"{g}/{f}" if g else f) not in only:
+                continue
+            if settle and now - os.path.getmtime(dwg) < settle:  # still being written
+                settling += 1
+                continue
             ref = os.path.join(folder, "ref", stem + ".glb")
             if not os.path.exists(ref):
                 no_ref += 1
@@ -182,7 +213,7 @@ def scan(samples, a, sel_keys):
     if a.subset:
         items.sort(key=lambda it: sha16(it["key"]))
         items = sorted(items[:a.subset], key=lambda it: it["key"])
-    return items, no_ref
+    return items, no_ref, settling
 
 
 # --- convert and compare (worker processes) ------------------------------------------
@@ -543,9 +574,11 @@ def cmd_run(a):
     log(f"run {run_id}\n  converter {conv['path']} ({conv.get('version', '')})")
     sel = load_selection(selection_path(a))
     sel_keys = selection_keys(sel)
-    items, no_ref = scan(a.samples, a, sel_keys)
-    limited = bool(a.subset or a.group or a.selection_only or a.skip_render)
-    log(f"{len(items)} DWGs with a reference ({no_ref} without one)")
+    items, no_ref, settling = scan(a.samples, a, sel_keys)
+    limited = bool(a.subset or a.group or a.selection_only or a.skip_render or a.list or settling)
+    log(f"{len(items)} DWGs with a reference ({no_ref} without one)"
+        + (f", {settling} skipped: modified in the last {a.settle:g} s" if settling else ""))
+    group_names = read_group_names(a.group_names)
     t0 = time.time()
     for it in items:
         it["dwg_sha"], it["ref_sha"] = hashes(it["dwg"]), hashes(it["ref"])
@@ -626,7 +659,7 @@ def cmd_run(a):
         present = []
         if not a.skip_collage:
             for r in rows:
-                r["_group"] = collage.nice_slug(r["group"])
+                r["_group"] = group_names.get(r["group"]) or collage.nice_slug(r["group"])
             lists = {k: [by_key[x["key"]] for x in sel.get(k, []) if x["key"] in by_key] for k in ("collage", "slides", "shots")}
             fails = collage.failures(rows, a.failures)
             present = list({r["key"]: r for r in lists["collage"] + lists["slides"] + lists["shots"] + fails}.values())
@@ -641,7 +674,7 @@ def cmd_run(a):
         R.run(run_dir)
         timings["render"] = round(time.time() - t0, 1)
         t0 = time.time()
-        report.build(run_dir, rows, bad, show, os.path.join(out, "cache", "diff"), info)
+        report.build(run_dir, rows, bad, show, os.path.join(out, "cache", "diff"), info, group_names)
         timings["report"] = round(time.time() - t0, 1)
         if not a.skip_collage:
             t0 = time.time()
@@ -686,6 +719,8 @@ def cmd_run(a):
                         "render": RENDER, "samples_per_side": compare.N_QUERY, "seed": 1,
                         "note": "Cycles seed 0; OptiX denoising is not bit-identical across drivers"},
            "scope": {"subset": a.subset, "group": a.group, "selection_only": a.selection_only,
+                     "list": os.path.abspath(a.list) if a.list else None, "settle_s": a.settle,
+                     "settling": settling,
                      "limited": limited, "skip_render": a.skip_render, "skip_collage": a.skip_collage},
            "samples": {"path": os.path.abspath(a.samples), "compared": len(rows), "without_reference": no_ref,
                        "from_cache": cached},
@@ -731,6 +766,8 @@ def load_rows(run_dir):
     with open(os.path.join(run_dir, "results.csv"), encoding="utf-8") as f:
         rows = {}
         for r in csv.DictReader(f):
+            if "group" not in r:  # older results.csv files call the column "folder"
+                r["group"] = r.get("folder") or ""
             r["key"] = row_key(r["group"], r["file"])
             rows[r["key"]] = r
         return rows
@@ -984,6 +1021,11 @@ def main():
     r.add_argument("--opt", action="append", help="extra dwg2gltf option (part of the cache key); repeatable")
     r.add_argument("--subset", type=int, default=0, help="only N DWGs (a fixed sample: lowest hash of the path)")
     r.add_argument("--group", nargs="*", help="only these top-level subfolders")
+    r.add_argument("--list", help="only the DWGs listed in this file (paths relative to --samples, one per line)")
+    r.add_argument("--settle", type=float, default=0, metavar="SECONDS",
+                   help="skip DWGs modified in the last SECONDS (a folder still being filled)")
+    r.add_argument("--group-names", metavar="TSV",
+                   help="display names of groups for the report and collages (columns: group, display name)")
     r.add_argument("--selection", help=sel_help)
     r.add_argument("--selection-only", action="store_true", help="only the drawings in the selection file")
     r.add_argument("--skip-render", action="store_true", help="no renders, report images or collages")
