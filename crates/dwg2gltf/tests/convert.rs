@@ -2055,3 +2055,122 @@ fn bricscad_surfaces_convert_in_every_version() {
     std::fs::remove_dir_all(dir).unwrap();
     assert!(failed.is_empty(), "{failed:#?}");
 }
+
+/// `n` unit squares as POLYLINE_PFACE the way pre-R2004 files store them:
+/// no vertex list in the polyline, its VERTEX_PFACE and VERTEX_PFACE_FACE
+/// records found through their owner (`by_owner`) or else through the
+/// polyline's first and last vertex handles. Each polyline is followed by
+/// a LINE, so the records of one mesh are not the only objects around.
+fn pface_squares(n: usize, by_owner: bool) -> Doc {
+    let mut doc = Doc::new(4);
+    let mut model_entities = vec![];
+    for k in 0..n {
+        let x = k as f64 * 2000.0;
+        let polyline = Shape::Polyline {
+            flag: 64,
+            elevation: 0.0,
+            widths: [0.0; 2],
+            m: 4,
+            n: 1,
+            vertices: vec![],
+            first: 0,
+            last: 0,
+        };
+        let pl = doc.add(
+            "POLYLINE_PFACE",
+            Data::Entity(Box::new(entity(doc.layer0, polyline))),
+        );
+        model_entities.push(pl);
+        let mut records = vec![];
+        for point in [
+            [x, 0.0, 0.0],
+            [x + 1000.0, 0.0, 0.0],
+            [x + 1000.0, 1000.0, 0.0],
+            [x, 1000.0, 0.0],
+        ] {
+            let vertex = Shape::Vertex {
+                point,
+                bulge: 0.0,
+                flag: 192,
+                widths: [0.0; 2],
+            };
+            records.push(doc.add(
+                "VERTEX_PFACE",
+                Data::Entity(Box::new(entity(doc.layer0, vertex))),
+            ));
+        }
+        let face = Shape::PfaceFace([1, 2, 3, 4]);
+        records.push(doc.add(
+            "VERTEX_PFACE_FACE",
+            Data::Entity(Box::new(entity(doc.layer0, face))),
+        ));
+        let line = Shape::Line {
+            start: [x, 0.0, 0.0],
+            end: [x, 0.0, 1000.0],
+        };
+        model_entities.push(doc.add("LINE", Data::Entity(Box::new(entity(doc.layer0, line)))));
+        // the objects were pushed in order: polyline, records, line
+        let objects = &mut doc.drawing.objects;
+        let at = objects.len() - records.len() - 2;
+        if by_owner {
+            for o in &mut objects[at + 1..at + 1 + records.len()] {
+                o.owner = pl;
+            }
+        } else if let Data::Entity(e) = &mut objects[at].data {
+            if let Shape::Polyline { first, last, .. } = &mut e.shape {
+                (*first, *last) = (records[0], *records.last().unwrap());
+            }
+        }
+    }
+    let model = doc.model;
+    match &mut doc.get(model).data {
+        Data::BlockHeader(b) => b.entities = Some(model_entities),
+        _ => unreachable!(),
+    }
+    doc
+}
+
+#[test]
+fn pface_vertices_by_owner_and_by_handle_range() {
+    for by_owner in [true, false] {
+        let (_, stats) = pface_squares(3, by_owner).run(Options::default());
+        assert_eq!(stats.triangles, 6, "by owner: {by_owner}");
+        assert_eq!(stats.lines, 3, "by owner: {by_owner}");
+        let options = Options {
+            lines: false,
+            ..Options::default()
+        };
+        let (gl, _) = pface_squares(3, by_owner).run(options);
+        let pos = &gl["accessors"][gl["meshes"][0]["primitives"][0]["attributes"]["POSITION"]
+            .as_u64()
+            .unwrap() as usize];
+        // three squares side by side, in drawing units
+        assert_eq!(pos["min"], serde_json::json!([0.0, 0.0, 0.0]));
+        assert_eq!(pos["max"], serde_json::json!([5000.0, 1000.0, 0.0]));
+    }
+}
+
+/// Finding the vertices of a polyline must not look at every object of the
+/// drawing: four times the meshes may take about four times as long, not
+/// sixteen.
+#[test]
+fn pface_vertices_scale_linearly() {
+    let time = |n: usize| {
+        (0..3)
+            .map(|_| {
+                let doc = pface_squares(n, true);
+                let start = std::time::Instant::now();
+                let (_, stats) = doc.run(Options::default());
+                assert_eq!(stats.triangles, 2 * n);
+                start.elapsed().as_secs_f64()
+            })
+            .fold(f64::INFINITY, f64::min)
+    };
+    let n = 2000;
+    let (small, large) = (time(n), time(4 * n));
+    assert!(
+        large < 8.0 * small,
+        "{n} meshes: {small:.3} s, {} meshes: {large:.3} s",
+        4 * n
+    );
+}
