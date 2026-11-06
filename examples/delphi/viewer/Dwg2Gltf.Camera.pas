@@ -22,11 +22,14 @@ type
     Target: TVec3;
     Distance: Double;
     Yaw, Pitch: Double;   // radians
-    FovY: Double;         // radians, also sets the orthographic scale
+    Fov: Double;          // radians, across the narrower side of the view;
+                          // also sets the orthographic scale
     Ortho: Boolean;
     Width, Height: Integer; // viewport in pixels
     SceneBox: TBox;       // for the near and far planes
     procedure Init;
+    { Tangent of half the vertical view angle. }
+    function TanHalfY: Double;
     function Eye: TVec3;
     { Unit vectors of the view: Forward (into the screen), Right, Up. }
     procedure Basis(out Forward, Right, Up: TVec3);
@@ -56,12 +59,18 @@ procedure TOrbitCamera.Init;
 begin
   Target := TVec3.Create(0, 0, 0);
   Distance := 10;
-  FovY := DegToRad(40);
+  Fov := DegToRad(40);
   Ortho := False;
   Width := 1;
   Height := 1;
   SceneBox.Clear;
   SetView(svIso);
+end;
+
+function TOrbitCamera.TanHalfY: Double;
+begin
+  // Fov spans the narrower side, so a tall window shows as much as a wide one
+  Result := Tan(Fov / 2) * Max(1, Max(Height, 1) / Max(Width, 1));
 end;
 
 function TOrbitCamera.Eye: TVec3;
@@ -115,13 +124,13 @@ begin
   if Ortho then
   begin
     ZNear := D - Radius;
-    H := 2 * Distance * Tan(FovY / 2);
+    H := 2 * Distance * TanHalfY;
     Result := OrthoRH(H * Aspect, H, ZNear, ZFar);
   end
   else
   begin
     ZNear := Max(D - Radius, ZFar * 1E-4);
-    Result := PerspectiveRH(FovY, Aspect, ZNear, ZFar);
+    Result := PerspectiveRH(2 * ArcTan(TanHalfY), Aspect, ZNear, ZFar);
   end;
 end;
 
@@ -138,7 +147,7 @@ begin
   Basis(F, R, U);
   NX := (2 * (X + 0.5) / Max(Width, 1) - 1) * Max(Width, 1) / Max(Height, 1);
   NY := 1 - 2 * (Y + 0.5) / Max(Height, 1);
-  H := Tan(FovY / 2);
+  H := TanHalfY;
   if Ortho then
   begin
     // parallel rays, starting well in front of the scene
@@ -177,7 +186,7 @@ begin
     Basis(F, R, U);
     D := Max((P - Eye).Dot(F), 1E-9);
   end;
-  Result := 2 * D * Tan(FovY / 2) / Max(Height, 1);
+  Result := 2 * D * TanHalfY / Max(Height, 1);
 end;
 
 procedure TOrbitCamera.Orbit(DX, DY: Double);
@@ -214,17 +223,16 @@ end;
 
 procedure TOrbitCamera.Fit(const Box: TBox);
 var
-  Radius, Aspect: Double;
+  Radius: Double;
 begin
   if Box.IsEmpty then
     Exit;
   Target := Box.Center;
   Radius := Max(Box.Radius, 1E-6);
-  Aspect := Max(Width, 1) / Max(Height, 1);
-  // the bounding sphere fits the narrower of the two view angles
-  Distance := 1.1 * Radius / Sin(Min(FovY, 2 * ArcTan(Tan(FovY / 2) * Aspect)) / 2);
+  // the bounding sphere fits the view angle across the narrower side
+  Distance := 1.1 * Radius / Sin(Fov / 2);
   if Ortho then
-    Distance := Distance * Cos(FovY / 2);
+    Distance := Distance * Cos(Fov / 2);
 end;
 
 procedure TOrbitCamera.SetView(V: TStandardView);

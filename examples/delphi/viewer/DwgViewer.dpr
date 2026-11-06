@@ -42,15 +42,27 @@ const
   ModeFileNames: array[TRenderMode] of string =
     ('shaded', 'edges', 'hidden', 'wireframe', 'triangles', 'xray');
 
-{ A GUI program has no console: write to the standard output handle the
-  caller passed, if any. }
+var
+  LogHandle: THandle = 0;
+
+{ A GUI program has no console of its own: write to the standard output
+  the caller redirected, else to the console of the command prompt that
+  started it. }
 procedure Log(const S: string);
 var
   Utf8: UTF8String;
   Written: DWORD;
   H: THandle;
 begin
-  H := GetStdHandle(STD_OUTPUT_HANDLE);
+  if LogHandle = 0 then
+  begin
+    LogHandle := GetStdHandle(STD_OUTPUT_HANDLE);
+    if ((LogHandle = 0) or (LogHandle = INVALID_HANDLE_VALUE)) and
+      AttachConsole(ATTACH_PARENT_PROCESS) then
+      LogHandle := CreateFile('CONOUT$', GENERIC_WRITE, FILE_SHARE_WRITE, nil,
+        OPEN_EXISTING, 0, 0);
+  end;
+  H := LogHandle;
   if (H = 0) or (H = INVALID_HANDLE_VALUE) then
     Exit;
   Utf8 := UTF8String(S + sLineBreak);

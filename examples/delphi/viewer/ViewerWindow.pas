@@ -54,6 +54,7 @@ type
     FDoc: TViewerDocument;
     FCamera: TOrbitCamera;
     FForceWarp: Boolean;
+    FBroken: Boolean; // rendering failed: stop trying
     FDrag: TDrag;
     FDragged: Boolean;
     FDown, FLast: TPoint;
@@ -212,7 +213,6 @@ var
   Mode: TRenderMode;
   Preset: TMaterialPreset;
   View: TStandardView;
-  Parts: array[0..2] of Integer;
 begin
   ICC.dwSize := SizeOf(ICC);
   ICC.dwICC := ICC_TREEVIEW_CLASSES or ICC_BAR_CLASSES;
@@ -269,10 +269,6 @@ begin
     TreeWidth, 0, 100, 100, FMain, 0, HInstance, nil);
   FStatus := CreateWindowEx(0, STATUSCLASSNAME, nil, WS_CHILD or WS_VISIBLE or SBARS_SIZEGRIP,
     0, 0, 0, 0, FMain, 0, HInstance, nil);
-  Parts[0] := 420;
-  Parts[1] := 860;
-  Parts[2] := -1;
-  SendMessage(FStatus, SB_SETPARTS, Length(Parts), Winapi.Windows.LPARAM(@Parts));
   SendMessage(FTree, WM_SETFONT, GetStockObject(DEFAULT_GUI_FONT), 0);
 end;
 
@@ -300,7 +296,14 @@ procedure TViewer.Layout;
 var
   R, SR: TRect;
   H: Integer;
+  Parts: array[0..2] of Integer;
 begin
+  GetClientRect(FMain, R);
+  // status bar: device | scene, selection or snap | measurement
+  Parts[0] := R.Width * 3 div 10;
+  Parts[1] := R.Width * 6 div 10;
+  Parts[2] := -1;
+  SendMessage(FStatus, SB_SETPARTS, Length(Parts), Winapi.Windows.LPARAM(@Parts));
   SendMessage(FStatus, WM_SIZE, 0, 0);
   GetWindowRect(FStatus, SR);
   H := SR.Height;
@@ -512,13 +515,30 @@ begin
 end;
 
 procedure TViewer.Paint;
+var
+  Lost: Boolean;
 begin
-  if FTarget = nil then
+  if (FTarget = nil) or FBroken then
     Exit;
   SyncCameraSize;
-  FTarget.Resize(FCamera.Width, FCamera.Height);
-  FRenderer.Render(FTarget, FCamera);
-  if not FTarget.Present then
+  try
+    FTarget.Resize(FCamera.Width, FCamera.Height);
+    FRenderer.Render(FTarget, FCamera);
+    Lost := not FTarget.Present;
+  except
+    on E: EGraphics do
+    begin
+      // a call failed: because the device is gone, or for real
+      Lost := Failed(FDev.Device.GetDeviceRemovedReason);
+      if not Lost then
+      begin
+        FBroken := True; // no endless message boxes
+        MessageBox(FMain, PChar(E.Message), 'DwgViewer', MB_ICONERROR);
+        Exit;
+      end;
+    end;
+  end;
+  if Lost then
   begin
     // the device is gone (driver update, remote session switched to
     // another adapter): start over with a new one, the scene is still open
@@ -770,11 +790,17 @@ begin
     if FileName <> '' then
       Viewer.Open(FileName);
     while GetMessage(Msg, 0, 0, 0) do
+    begin
+      // the wheel goes to the focused window; send it to the 3D view when
+      // the cursor is over it
+      if (Msg.message = WM_MOUSEWHEEL) and (WindowFromPoint(Msg.pt) = Viewer.FView) then
+        Msg.hwnd := Viewer.FView;
       if TranslateAccelerator(Viewer.FMain, Accel, Msg) = 0 then
       begin
         TranslateMessage(Msg);
         DispatchMessage(Msg);
       end;
+    end;
   finally
     FreeAndNil(Viewer);
     DestroyAcceleratorTable(Accel);

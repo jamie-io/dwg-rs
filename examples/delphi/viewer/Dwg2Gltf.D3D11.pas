@@ -293,7 +293,8 @@ var
   HR: HRESULT;
 begin
   Resolve;
-  Check(FSwapChain.GetBuffer(0, ID3D11Texture2D, BackBuffer), 'GetBuffer');
+  if Failed(FSwapChain.GetBuffer(0, ID3D11Texture2D, BackBuffer)) then
+    Exit(False);
   // UNORM back buffer, sRGB frame: same bytes, CopyResource allows it
   FDev.Context.CopyResource(BackBuffer, FResolved);
   BackBuffer := nil;

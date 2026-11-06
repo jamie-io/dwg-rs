@@ -242,7 +242,7 @@ type
   end;
 
 const
-  OverlayCapacity = 256; // vertices
+  OverlayCapacity = 1024; // vertices
   EdgeColor: TColor4 = (0.02, 0.02, 0.025, 1);
   HighlightColor: TColor4 = (1.0, 0.33, 0.02, 1);
   CullNone = 0;
@@ -959,7 +959,7 @@ var
   Stride, Offset: UINT;
   BlendFactor: TFourSingleArray;
 
-  procedure Add(const A, B: TVec3; const C: TColor4);
+  procedure AddLine(const A, B: TVec3; const C: TColor4);
   begin
     if Length(Verts) + 2 > OverlayCapacity then
       Exit;
@@ -972,6 +972,16 @@ var
     Verts[High(Verts)].Pos[1] := B.Y;
     Verts[High(Verts)].Pos[2] := B.Z;
     Colors := Colors + [C];
+  end;
+
+  // two pixels wide: once more, shifted by a pixel on screen
+  procedure Add(const A, B: TVec3; const C: TColor4);
+  var
+    D: TVec3;
+  begin
+    AddLine(A, B, C);
+    D := (R + U) * (0.7 * FCamera.PixelSize((A + B) * 0.5));
+    AddLine(A + D, B + D, C);
   end;
 
 begin

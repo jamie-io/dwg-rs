@@ -151,17 +151,32 @@ begin
     Camera.Width := 800;
     Camera.Height := 600;
     Camera.SceneBox := Doc.Box;
-    for View := Low(TStandardView) to High(TStandardView) do
-    begin
-      Camera.SetView(View);
-      Camera.Fit(Doc.Box);
-      P := Doc.Box.Center + TVec3.Create(0.1, 0.2, -0.05) * R;
-      Expect(Camera.Project(P, X, Y), 'projection');
-      Ray := Camera.RayAt(X, Y);
-      // distance of P from the ray
-      Expect((P - Ray.Origin - Ray.Dir * (P - Ray.Origin).Dot(Ray.Dir)).Length < 1E-6 * R,
-        'RayAt and Project disagree');
-    end;
+    for I := 0 to 3 do // landscape and portrait, perspective and orthographic
+      for View := Low(TStandardView) to High(TStandardView) do
+      begin
+        Camera.Width := IfThen(I and 1 = 0, 800, 600);
+        Camera.Height := IfThen(I and 1 = 0, 600, 800);
+        Camera.Ortho := I >= 2;
+        Camera.SetView(View);
+        Camera.Fit(Doc.Box);
+        P := Doc.Box.Center + TVec3.Create(0.1, 0.2, -0.05) * R;
+        Expect(Camera.Project(P, X, Y), 'projection');
+        Ray := Camera.RayAt(X, Y);
+        // distance of P from the ray
+        Expect((P - Ray.Origin - Ray.Dir * (P - Ray.Origin).Dot(Ray.Dir)).Length < 1E-6 * R,
+          'RayAt and Project disagree');
+        // the fitted scene's box corners are all on screen
+        for J := 0 to 7 do
+        begin
+          if J and 1 = 0 then Corner.X := Doc.Box.Min.X else Corner.X := Doc.Box.Max.X;
+          if J and 2 = 0 then Corner.Y := Doc.Box.Min.Y else Corner.Y := Doc.Box.Max.Y;
+          if J and 4 = 0 then Corner.Z := Doc.Box.Min.Z else Corner.Z := Doc.Box.Max.Z;
+          Expect(Camera.Project(Corner, X, Y) and (X >= 0) and (Y >= 0) and
+            (X < Camera.Width) and (Y < Camera.Height), 'Fit leaves a box corner off screen');
+        end;
+      end;
+    Camera.Width := 800;
+    Camera.Height := 600;
 
     // 3. snapping: a few pixels next to the projected end point of a
     // visible edge, where nothing hides it, gives an end point at most as
