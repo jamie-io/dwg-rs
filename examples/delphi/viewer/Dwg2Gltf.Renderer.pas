@@ -6,9 +6,11 @@
   Upload copies the scene into GPU buffers once: per mesh one vertex buffer
   (position, normal, UV interleaved), one index buffer for its triangle and
   line submeshes and one for its visible edges (a line list into the same
-  vertices); per texture a shader resource view with mipmaps. Render then
-  draws every instance with its world matrix (one constant buffer update per
-  draw: simple, and fast enough for tens of thousands of draws).
+  vertices); per texture a shader resource view with mipmaps; and one
+  instance buffer with every instance's world and normal matrix, sorted by
+  mesh. Render draws each submesh of a mesh once for all its instances
+  (DrawIndexedInstanced): the number of draw calls follows the number of
+  different meshes and materials, not the number of block instances.
 
   Shading: Blinn-Phong with a light at the camera, slightly above and left
   of it, plus a sky/ground ambient; base color times texture; transparent
@@ -61,8 +63,16 @@ type
     Mesh: Integer;
     Node: Integer;
     World: TMat4;      // double, relative to Origin
-    WorldF, NormalF: TMat4F;
     Mirrored: Boolean; // flips the winding: cull the other side
+    Slot: Integer;     // position in the instance buffer
+  end;
+
+  { Instances of one mesh with the same winding: consecutive slots of the
+    instance buffer, drawn together. }
+  TInstanceGroup = record
+    Mesh: Integer;
+    Mirrored: Boolean;
+    First, Count: Integer;
   end;
 
   TOverlayLine = record
@@ -84,6 +94,7 @@ type
     FLayout: ID3D11InputLayout;
     FFrameCB, FObjectCB: ID3D11Buffer;
     FOverlayVB: ID3D11Buffer;
+    FInstanceVB: ID3D11Buffer;
     FSampler: ID3D11SamplerState;
     // rasterizer states: [depth bias for edges][cull: none, back, front]
     FRasterSolid: array[Boolean, 0..2] of ID3D11RasterizerState;
@@ -94,6 +105,7 @@ type
     FMaterials: TArray<TGpuMaterial>;
     FTextures: TArray<ID3D11ShaderResourceView>;
     FInstances: TArray<TGpuInstance>;
+    FGroups: TArray<TInstanceGroup>;
     FHighlight: TArray<Boolean>;
     FUploadBytes: Int64;
     FDrawCalls: Integer;
@@ -104,8 +116,9 @@ type
     function MakeBuffer(Bind: UINT; Data: Pointer; Bytes: NativeUInt): ID3D11Buffer;
     function UploadTexture(const Tex: TDwgTexture): ID3D11ShaderResourceView;
     procedure SetFrame(const Camera: TOrbitCamera);
-    procedure SetObject(const Inst: TGpuInstance; const Color: TColor4; Lit, Textured: Boolean;
-      Spec, Shininess: Single; Highlight: Single = 0);
+    procedure SetObject(const Color: TColor4; Lit, Textured: Boolean; Spec, Shininess,
+      Highlight: Single);
+    procedure UploadInstances;
     procedure BindMesh(Mesh: Integer);
     function EffectiveMaterial(Index: UINT): TGpuMaterial;
     procedure DrawFaces(Faces: TRenderMode; Transparent: Boolean; Bias: Boolean);
@@ -126,6 +139,7 @@ type
     { Highlight the instances whose flag is set (nil: none). }
     procedure SetHighlight(const Flags: TArray<Boolean>);
     property Instances: TArray<TGpuInstance> read FInstances;
+    property Groups: TArray<TInstanceGroup> read FGroups;
     property UploadBytes: Int64 read FUploadBytes;
     property DrawCalls: Integer read FDrawCalls;
     { Textures that could not be decoded and the like. }
@@ -156,31 +170,40 @@ const
     '  float4 LightDir; // xyz: towards the light'#10 +
     '  float4 Sky;      // ambient from above'#10 +
     '  float4 Ground;   // ambient from below'#10 +
+    '  float4 HighlightColor;'#10 +
     '};'#10 +
     'cbuffer Object : register(b1) {'#10 +
-    '  float4x4 World;'#10 +
-    '  float4x4 NormalMatrix; // upper 3x3: inverse transpose of World'#10 +
-    '  float4 Color;          // linear RGBA'#10 +
-    '  float4 Shade;          // x: specular, y: shininess, z: lit (1) or flat (0), w: textured'#10 +
-    '  float4 Highlight;      // rgb, a: how much of it'#10 +
+    '  float4 Color;    // linear RGBA'#10 +
+    '  float4 Shade;    // x: specular, y: shininess, z: lit (1) or flat (0), w: textured'#10 +
+    '  float4 Extra;    // x: how much a highlighted instance takes the highlight color'#10 +
     '};'#10 +
     'Texture2D BaseColorTex : register(t0);'#10 +
     'SamplerState Smp : register(s0);'#10 +
-    'struct VSIn { float3 pos : POSITION; float3 nrm : NORMAL; float2 uv : TEXCOORD0; };'#10 +
-    'struct PSIn { float4 pos : SV_Position; float3 wpos : WORLDPOS; float3 nrm : NORMAL; float2 uv : TEXCOORD0; };'#10 +
+    'struct VSIn {'#10 +
+    '  float3 pos : POSITION; float3 nrm : NORMAL; float2 uv : TEXCOORD0;'#10 +
+    '  // per instance: the world matrix and the normal matrix by columns'#10 +
+    '  float4 w0 : WORLD0; float4 w1 : WORLD1; float4 w2 : WORLD2; float4 w3 : WORLD3;'#10 +
+    '  float3 n0 : NORMALMATRIX0; float3 n1 : NORMALMATRIX1; float3 n2 : NORMALMATRIX2;'#10 +
+    '  float4 flags : INSTANCEFLAGS; // x: highlighted'#10 +
+    '};'#10 +
+    'struct PSIn {'#10 +
+    '  float4 pos : SV_Position; float3 wpos : WORLDPOS; float3 nrm : NORMAL; float2 uv : TEXCOORD0;'#10 +
+    '  nointerpolation float highlight : HIGHLIGHT;'#10 +
+    '};'#10 +
     'PSIn VS(VSIn i) {'#10 +
     '  PSIn o;'#10 +
-    '  float4 wp = mul(World, float4(i.pos, 1));'#10 +
+    '  float4 wp = i.w0 * i.pos.x + i.w1 * i.pos.y + i.w2 * i.pos.z + i.w3;'#10 +
     '  o.pos = mul(ViewProj, wp);'#10 +
     '  o.wpos = wp.xyz;'#10 +
-    '  o.nrm = mul((float3x3)NormalMatrix, i.nrm);'#10 +
+    '  o.nrm = i.n0 * i.nrm.x + i.n1 * i.nrm.y + i.n2 * i.nrm.z;'#10 +
     '  o.uv = i.uv;'#10 +
+    '  o.highlight = i.flags.x * Extra.x;'#10 +
     '  return o;'#10 +
     '}'#10 +
     'float4 PS(PSIn i, bool front : SV_IsFrontFace) : SV_Target {'#10 +
     '  float4 c = Color;'#10 +
     '  if (Shade.w > 0) c *= BaseColorTex.Sample(Smp, i.uv);'#10 +
-    '  c.rgb = lerp(c.rgb, Highlight.rgb, Highlight.a);'#10 +
+    '  c.rgb = lerp(c.rgb, HighlightColor.rgb, i.highlight);'#10 +
     '  if (Shade.z == 0) return c;'#10 +
     '  float3 v = Eye.w > 0 ? normalize(Eye.xyz - i.wpos) : Eye.xyz;'#10 +
     '  float len = length(i.nrm);'#10 +
@@ -203,12 +226,19 @@ type
 
   TFrameConstants = record
     ViewProj: TMat4F;
-    Eye, LightDir, Sky, Ground: TColor4;
+    Eye, LightDir, Sky, Ground, Highlight: TColor4;
   end;
 
   TObjectConstants = record
-    World, Normal: TMat4F;
-    Color, Shade, Highlight: TColor4;
+    Color, Shade, Extra: TColor4;
+    Pad: TColor4; // constant buffers are multiples of 16 bytes; 64 is tidy
+  end;
+
+  { One instance in the instance buffer (input slot 1). }
+  TInstanceData = record
+    World: TMat4F;                   // 4 columns
+    Normal: array[0..2, 0..3] of Single; // 3 columns, xyz used
+    Flags: TColor4;                  // x: highlighted
   end;
 
 const
@@ -271,7 +301,8 @@ end;
 procedure TDwgRenderer.CreatePipeline;
 var
   VSCode, PSCode: ID3DBlob;
-  Elements: array[0..2] of D3D11_INPUT_ELEMENT_DESC;
+  Elements: array[0..10] of D3D11_INPUT_ELEMENT_DESC;
+  I: Integer;
   Desc: D3D11_BUFFER_DESC;
   Raster: D3D11_RASTERIZER_DESC;
   Depth: D3D11_DEPTH_STENCIL_DESC;
@@ -297,6 +328,30 @@ begin
   Elements[2].SemanticName := 'TEXCOORD';
   Elements[2].Format := DXGI_FORMAT_R32G32_FLOAT;
   Elements[2].AlignedByteOffset := 24;
+  // per instance, from the instance buffer in slot 1
+  for I := 3 to 10 do
+  begin
+    Elements[I].InputSlot := 1;
+    Elements[I].InputSlotClass := D3D11_INPUT_PER_INSTANCE_DATA;
+    Elements[I].InstanceDataStepRate := 1;
+    Elements[I].AlignedByteOffset := (I - 3) * 16;
+    Elements[I].Format := DXGI_FORMAT_R32G32B32A32_FLOAT;
+    case I of
+      3..6:
+        begin
+          Elements[I].SemanticName := 'WORLD';
+          Elements[I].SemanticIndex := I - 3;
+        end;
+      7..9:
+        begin
+          Elements[I].SemanticName := 'NORMALMATRIX';
+          Elements[I].SemanticIndex := I - 7;
+          Elements[I].Format := DXGI_FORMAT_R32G32B32_FLOAT;
+        end;
+      10:
+        Elements[I].SemanticName := 'INSTANCEFLAGS';
+    end;
+  end;
   Check(FDev.Device.CreateInputLayout(@Elements[0], Length(Elements), VSCode.GetBufferPointer,
     VSCode.GetBufferSize, FLayout), 'CreateInputLayout');
 
@@ -429,6 +484,8 @@ begin
   FMaterials := nil;
   FTextures := nil;
   FInstances := nil;
+  FGroups := nil;
+  FInstanceVB := nil;
   FHighlight := nil;
   FWarnings := nil;
   Overlay := nil;
@@ -445,6 +502,7 @@ var
   Node: PDwgNode;
   World: TMat4;
   Rough: Single;
+  Order: TArray<Integer>;
 begin
   Clear;
   SetLength(FTextures, Data.texture_count);
@@ -527,11 +585,85 @@ begin
     World.M[13] := World.M[13] - Origin.Y;
     World.M[14] := World.M[14] - Origin.Z;
     FInstances[I].World := World;
-    FInstances[I].WorldF := ToFloat(World);
-    FInstances[I].NormalF := ToFloat(World.NormalMatrix);
     FInstances[I].Mirrored := World.Det3 < 0;
   end;
   SetLength(FHighlight, Length(FInstances));
+
+  // slots sorted by mesh and winding; groups of equal ones
+  SetLength(Order, Length(FInstances));
+  for I := 0 to High(Order) do
+    Order[I] := I;
+  TArray.Sort<Integer>(Order, TComparer<Integer>.Construct(
+    function(const A, B: Integer): Integer
+    begin
+      Result := FInstances[A].Mesh - FInstances[B].Mesh;
+      if Result = 0 then
+        Result := Ord(FInstances[A].Mirrored) - Ord(FInstances[B].Mirrored);
+      if Result = 0 then
+        Result := A - B;
+    end));
+  for I := 0 to High(Order) do
+  begin
+    FInstances[Order[I]].Slot := I;
+    if (FGroups = nil) or (FGroups[High(FGroups)].Mesh <> FInstances[Order[I]].Mesh) or
+      (FGroups[High(FGroups)].Mirrored <> FInstances[Order[I]].Mirrored) then
+    begin
+      SetLength(FGroups, Length(FGroups) + 1);
+      FGroups[High(FGroups)].Mesh := FInstances[Order[I]].Mesh;
+      FGroups[High(FGroups)].Mirrored := FInstances[Order[I]].Mirrored;
+      FGroups[High(FGroups)].First := I;
+      FGroups[High(FGroups)].Count := 0;
+    end;
+    Inc(FGroups[High(FGroups)].Count);
+  end;
+  UploadInstances;
+end;
+
+procedure TDwgRenderer.UploadInstances;
+var
+  Data: TArray<TInstanceData>;
+  Desc: D3D11_BUFFER_DESC;
+  Init: D3D11_SUBRESOURCE_DATA;
+  I, R, C: Integer;
+  N: TMat4;
+begin
+  // one more slot at the end: the identity, for the overlay
+  SetLength(Data, Length(FInstances) + 1);
+  for I := 0 to High(FInstances) do
+    with Data[FInstances[I].Slot] do
+    begin
+      World := ToFloat(FInstances[I].World);
+      N := FInstances[I].World.NormalMatrix;
+      for C := 0 to 2 do
+      begin
+        for R := 0 to 2 do
+          Normal[C, R] := N.Get(R, C);
+        Normal[C, 3] := 0;
+      end;
+      Flags := Color4(Ord(FHighlight[I]), 0, 0, 0);
+    end;
+  with Data[High(Data)] do
+  begin
+    World := ToFloat(TMat4.Identity);
+    FillChar(Normal, SizeOf(Normal), 0);
+    Normal[0, 0] := 1;
+    Normal[1, 1] := 1;
+    Normal[2, 2] := 1;
+    Flags := Color4(0, 0, 0, 0);
+  end;
+  if FInstanceVB = nil then
+  begin
+    FillChar(Desc, SizeOf(Desc), 0);
+    Desc.ByteWidth := Length(Data) * SizeOf(TInstanceData);
+    Desc.Usage := D3D11_USAGE_DEFAULT; // rewritten when the highlight changes
+    Desc.BindFlags := D3D11_BIND_VERTEX_BUFFER;
+    FillChar(Init, SizeOf(Init), 0);
+    Init.pSysMem := @Data[0];
+    Check(FDev.Device.CreateBuffer(Desc, @Init, FInstanceVB), 'CreateBuffer(instances)');
+    Inc(FUploadBytes, Desc.ByteWidth);
+  end
+  else
+    FDev.Context.UpdateSubresource(FInstanceVB, 0, nil, @Data[0], 0, 0);
 end;
 
 procedure TDwgRenderer.SetHighlight(const Flags: TArray<Boolean>);
@@ -540,6 +672,8 @@ var
 begin
   for I := 0 to High(FHighlight) do
     FHighlight[I] := (I < Length(Flags)) and Flags[I];
+  if FInstanceVB <> nil then
+    UploadInstances;
 end;
 
 function TDwgRenderer.EffectiveMaterial(Index: UINT): TGpuMaterial;
@@ -602,23 +736,22 @@ begin
   C.LightDir := Color4(L.X, L.Y, L.Z, 0);
   C.Sky := Color4(0.30, 0.31, 0.34);
   C.Ground := Color4(0.12, 0.11, 0.10);
+  C.Highlight := HighlightColor;
   Check(FDev.Context.Map(FFrameCB, 0, D3D11_MAP_WRITE_DISCARD, 0, Mapped), 'Map');
   Move(C, Mapped.pData^, SizeOf(C));
   FDev.Context.Unmap(FFrameCB, 0);
 end;
 
-procedure TDwgRenderer.SetObject(const Inst: TGpuInstance; const Color: TColor4; Lit,
-  Textured: Boolean; Spec, Shininess, Highlight: Single);
+procedure TDwgRenderer.SetObject(const Color: TColor4; Lit, Textured: Boolean; Spec,
+  Shininess, Highlight: Single);
 var
   C: TObjectConstants;
   Mapped: D3D11_MAPPED_SUBRESOURCE;
 begin
-  C.World := Inst.WorldF;
-  C.Normal := Inst.NormalF;
   C.Color := Color;
   C.Shade := Color4(Spec, Shininess, Ord(Lit), Ord(Textured));
-  C.Highlight := HighlightColor;
-  C.Highlight[3] := Highlight;
+  C.Extra := Color4(Highlight, 0, 0, 0);
+  C.Pad := C.Extra;
   Check(FDev.Context.Map(FObjectCB, 0, D3D11_MAP_WRITE_DISCARD, 0, Mapped), 'Map');
   Move(C, Mapped.pData^, SizeOf(C));
   FDev.Context.Unmap(FObjectCB, 0);
@@ -635,6 +768,7 @@ begin
   Stride := SizeOf(TVertex);
   Offset := 0;
   FDev.Context.IASetVertexBuffers(0, 1, FMeshes[Mesh].VB, @Stride, @Offset);
+  FDev.Context.IASetIndexBuffer(FMeshes[Mesh].IB, DXGI_FORMAT_R32_UINT, 0);
 end;
 
 procedure TDwgRenderer.DrawFaces(Faces: TRenderMode; Transparent: Boolean; Bias: Boolean);
@@ -646,13 +780,84 @@ type
 var
   Items: TList<TDrawItem>;
   Item: TDrawItem;
-  I, J, Cull: Integer;
-  Mat: TGpuMaterial;
-  Sub: TDwgSubmesh;
-  Color: TColor4;
-  Lit, Textured, Hl: Boolean;
+  G, I, J: Integer;
   F, R, U: TVec3;
+
+  // one submesh: for Count instances from slot First
+  procedure Draw(const Sub: TDwgSubmesh; Mirrored: Boolean; First, Count: Integer);
+  var
+    Mat: TGpuMaterial;
+    Color: TColor4;
+    Lit, Textured: Boolean;
+    Cull: Integer;
+  begin
+    Mat := EffectiveMaterial(Sub.material);
+    Lit := not Mat.Unlit;
+    Textured := Mat.Texture >= 0;
+    Color := Mat.Color;
+    case Faces of
+      rmHiddenLine:
+        begin
+          Color := Color4(1, 1, 1);
+          Lit := False;
+          Textured := False;
+        end;
+      rmXRay:
+        begin
+          Color[3] := 0.12;
+          Textured := False;
+        end;
+      rmTriangles:
+        begin
+          Lit := False;
+          Textured := False;
+          Color[3] := 1;
+        end;
+    end;
+    // single-sided: cull the back, which a mirroring instance turns into
+    // the front
+    Cull := CullNone;
+    if not Mat.DoubleSided and (Faces in [rmShaded, rmShadedEdges]) then
+      if Mirrored then
+        Cull := CullFront
+      else
+        Cull := CullBack;
+    if Faces = rmTriangles then
+      FDev.Context.RSSetState(FRasterWire)
+    else
+      FDev.Context.RSSetState(FRasterSolid[Bias, Cull]);
+    if Textured then
+      FDev.Context.PSSetShaderResources(0, 1, FTextures[Mat.Texture]);
+    SetObject(Color, Lit, Textured, Mat.SpecStrength, Mat.Shininess, 0.55);
+    FDev.Context.DrawIndexedInstanced(Sub.index_count, Count, Sub.first_index, 0, First);
+  end;
+
+  function Wanted(const Sub: TDwgSubmesh): Boolean;
+  begin
+    Result := Sub.topology = DWG_TRIANGLES;
+    // hidden line and x-ray ignore the materials' transparency
+    if Result and (Faces in [rmShaded, rmShadedEdges]) then
+      Result := EffectiveMaterial(Sub.material).Blend = Transparent;
+  end;
+
 begin
+  if not Transparent then
+  begin
+    // all instances of a mesh at once
+    for G := 0 to High(FGroups) do
+      with FGroups[G] do
+      begin
+        if FMeshes[Mesh].VB = nil then
+          Continue;
+        BindMesh(Mesh);
+        for J := 0 to High(FMeshes[Mesh].Submeshes) do
+          if Wanted(FMeshes[Mesh].Submeshes[J]) then
+            Draw(FMeshes[Mesh].Submeshes[J], Mirrored, First, Count);
+      end;
+    Exit;
+  end;
+
+  // transparent: one instance at a time, back to front
   FCamera.Basis(F, R, U);
   Items := TList<TDrawItem>.Create;
   try
@@ -661,76 +866,26 @@ begin
       if FMeshes[FInstances[I].Mesh].VB = nil then
         Continue;
       for J := 0 to High(FMeshes[FInstances[I].Mesh].Submeshes) do
-      begin
-        Sub := FMeshes[FInstances[I].Mesh].Submeshes[J];
-        if Sub.topology <> DWG_TRIANGLES then
-          Continue;
-        // hidden line and x-ray ignore the materials' transparency
-        if Faces in [rmShaded, rmShadedEdges] then
-          if EffectiveMaterial(Sub.material).Blend <> Transparent then
-            Continue;
-        Item.Instance := I;
-        Item.Submesh := J;
-        Item.Depth := FInstances[I].World.TransformPoint(
-          FMeshes[FInstances[I].Mesh].Center).Dot(F);
-        Items.Add(Item);
-      end;
-    end;
-    if Transparent then // back to front
-      Items.Sort(TComparer<TDrawItem>.Construct(
-        function(const A, B: TDrawItem): Integer
+        if Wanted(FMeshes[FInstances[I].Mesh].Submeshes[J]) then
         begin
-          Result := CompareValue(B.Depth, A.Depth);
-        end));
-
-    for Item in Items do
-    begin
-      BindMesh(FInstances[Item.Instance].Mesh);
-      Sub := FMeshes[FInstances[Item.Instance].Mesh].Submeshes[Item.Submesh];
-      Mat := EffectiveMaterial(Sub.material);
-      Hl := FHighlight[Item.Instance];
-      Lit := not Mat.Unlit;
-      Textured := Mat.Texture >= 0;
-      Color := Mat.Color;
-      case Faces of
-        rmHiddenLine:
-          begin
-            Color := Color4(1, 1, 1);
-            Lit := False;
-            Textured := False;
-          end;
-        rmXRay:
-          begin
-            Color[3] := 0.12;
-            Textured := False;
-          end;
-        rmTriangles:
-          begin
-            Lit := False;
-            Textured := False;
-            Color[3] := 1;
-          end;
-      end;
-      // single-sided: cull the back, which a mirroring instance turns
-      // into the front
-      Cull := CullNone;
-      if not Mat.DoubleSided and (Faces in [rmShaded, rmShadedEdges]) then
-        if FInstances[Item.Instance].Mirrored then
-          Cull := CullFront
-        else
-          Cull := CullBack;
-      if Faces = rmTriangles then
-        FDev.Context.RSSetState(FRasterWire)
-      else
-        FDev.Context.RSSetState(FRasterSolid[Bias, Cull]);
-      if Textured then
-        FDev.Context.PSSetShaderResources(0, 1, FTextures[Mat.Texture]);
-      SetObject(FInstances[Item.Instance], Color, Lit, Textured, Mat.SpecStrength, Mat.Shininess,
-        IfThen(Hl, 0.55, 0));
-      FDev.Context.IASetIndexBuffer(FMeshes[FInstances[Item.Instance].Mesh].IB,
-        DXGI_FORMAT_R32_UINT, 0);
-      FDev.Context.DrawIndexed(Sub.index_count, Sub.first_index, 0);
+          Item.Instance := I;
+          Item.Submesh := J;
+          Item.Depth := FInstances[I].World.TransformPoint(
+            FMeshes[FInstances[I].Mesh].Center).Dot(F);
+          Items.Add(Item);
+        end;
     end;
+    Items.Sort(TComparer<TDrawItem>.Construct(
+      function(const A, B: TDrawItem): Integer
+      begin
+        Result := CompareValue(B.Depth, A.Depth);
+      end));
+    for Item in Items do
+      with FInstances[Item.Instance] do
+      begin
+        BindMesh(Mesh);
+        Draw(FMeshes[Mesh].Submeshes[Item.Submesh], Mirrored, Slot, 1);
+      end;
   finally
     Items.Free;
   end;
@@ -738,7 +893,7 @@ end;
 
 procedure TDwgRenderer.DrawLines(DepthTest: Boolean; Black: Boolean);
 var
-  I, J: Integer;
+  G, J: Integer;
   Sub: TDwgSubmesh;
   Color: TColor4;
 begin
@@ -748,53 +903,49 @@ begin
     FDev.Context.OMSetDepthStencilState(FDepthWrite, 0)
   else
     FDev.Context.OMSetDepthStencilState(FDepthOff, 0);
-  for I := 0 to High(FInstances) do
-  begin
-    if FMeshes[FInstances[I].Mesh].VB = nil then
-      Continue;
-    for J := 0 to High(FMeshes[FInstances[I].Mesh].Submeshes) do
+  for G := 0 to High(FGroups) do
+    with FGroups[G] do
     begin
-      Sub := FMeshes[FInstances[I].Mesh].Submeshes[J];
-      if Sub.topology <> DWG_LINES then
+      if FMeshes[Mesh].VB = nil then
         Continue;
-      if Integer(Sub.material) < Length(FMaterials) then
-        Color := FMaterials[Sub.material].Color
-      else
-        Color := EdgeColor;
-      if Black then
-        Color := EdgeColor;
-      if FHighlight[I] then
-        Color := HighlightColor;
-      Color[3] := 1;
-      BindMesh(FInstances[I].Mesh);
-      SetObject(FInstances[I], Color, False, False, 0, 1);
-      FDev.Context.IASetIndexBuffer(FMeshes[FInstances[I].Mesh].IB, DXGI_FORMAT_R32_UINT, 0);
-      FDev.Context.DrawIndexed(Sub.index_count, Sub.first_index, 0);
+      for J := 0 to High(FMeshes[Mesh].Submeshes) do
+      begin
+        Sub := FMeshes[Mesh].Submeshes[J];
+        if Sub.topology <> DWG_LINES then
+          Continue;
+        if not Black and (Integer(Sub.material) < Length(FMaterials)) then
+          Color := FMaterials[Sub.material].Color
+        else
+          Color := EdgeColor;
+        Color[3] := 1;
+        BindMesh(Mesh);
+        SetObject(Color, False, False, 0, 1, 1);
+        FDev.Context.DrawIndexedInstanced(Sub.index_count, Count, Sub.first_index, 0, First);
+      end;
     end;
-  end;
 end;
 
 procedure TDwgRenderer.DrawEdges(DepthTest: Boolean; const Color: TColor4);
 var
-  I: Integer;
+  G: Integer;
 begin
   FDev.Context.RSSetState(FRasterSolid[False, CullNone]);
   if DepthTest then
     FDev.Context.OMSetDepthStencilState(FDepthTest, 0)
   else
     FDev.Context.OMSetDepthStencilState(FDepthOff, 0);
-  for I := 0 to High(FInstances) do
-  begin
-    if FMeshes[FInstances[I].Mesh].EB = nil then
-      Continue;
-    BindMesh(FInstances[I].Mesh);
-    if FHighlight[I] then
-      SetObject(FInstances[I], HighlightColor, False, False, 0, 1)
-    else
-      SetObject(FInstances[I], Color, False, False, 0, 1);
-    FDev.Context.IASetIndexBuffer(FMeshes[FInstances[I].Mesh].EB, DXGI_FORMAT_R32_UINT, 0);
-    FDev.Context.DrawIndexed(FMeshes[FInstances[I].Mesh].EdgeIndexCount, 0, 0);
-  end;
+  SetObject(Color, False, False, 0, 1, 1);
+  for G := 0 to High(FGroups) do
+    with FGroups[G] do
+    begin
+      if FMeshes[Mesh].EB = nil then
+        Continue;
+      BindMesh(Mesh);
+      FDev.Context.IASetIndexBuffer(FMeshes[Mesh].EB, DXGI_FORMAT_R32_UINT, 0);
+      FDev.Context.DrawIndexedInstanced(FMeshes[Mesh].EdgeIndexCount, Count, 0, 0, First);
+      Inc(FDrawCalls);
+    end;
+  FCurrentMesh := -1; // the triangle index buffer is no longer bound
 end;
 
 procedure TDwgRenderer.DrawOverlay;
@@ -802,7 +953,6 @@ var
   Verts: TArray<TVertex>;
   Colors: TArray<TColor4>;
   Mapped: D3D11_MAPPED_SUBRESOURCE;
-  Identity: TGpuInstance;
   F, R, U: TVec3;
   I, N: Integer;
   S: Double;
@@ -878,12 +1028,11 @@ begin
   FDev.Context.OMSetDepthStencilState(FDepthOff, 0);
   FillChar(BlendFactor, SizeOf(BlendFactor), 0);
   FDev.Context.OMSetBlendState(nil, BlendFactor, $FFFFFFFF);
-  Identity.WorldF := ToFloat(TMat4.Identity);
-  Identity.NormalF := Identity.WorldF;
+  // the identity instance after the scene's instances
   for I := 0 to N div 2 - 1 do
   begin
-    SetObject(Identity, Colors[I], False, False, 0, 1);
-    FDev.Context.Draw(2, 2 * I);
+    SetObject(Colors[I], False, False, 0, 1, 0);
+    FDev.Context.DrawInstanced(2, 1, 2 * I, Length(FInstances));
   end;
 end;
 
@@ -893,6 +1042,7 @@ var
   BlendFactor: TFourSingleArray;
   NoInstances: ID3D11ClassInstance;
   Edges, Bias: Boolean;
+  Stride, Offset: UINT;
 begin
   FDrawCalls := 0;
   FCurrentMesh := -1;
@@ -917,11 +1067,11 @@ begin
     FillChar(BlendFactor, SizeOf(BlendFactor), 0);
     OMSetBlendState(nil, BlendFactor, $FFFFFFFF);
   end;
-  if FInstances = nil then
-  begin
-    DrawOverlay;
-    Exit;
-  end;
+  if FInstanceVB = nil then
+    Exit; // nothing uploaded
+  Stride := SizeOf(TInstanceData);
+  Offset := 0;
+  FDev.Context.IASetVertexBuffers(1, 1, FInstanceVB, @Stride, @Offset);
 
   Edges := Mode in [rmShadedEdges, rmHiddenLine, rmWireframe, rmXRay];
   Bias := Mode in [rmShadedEdges, rmHiddenLine];

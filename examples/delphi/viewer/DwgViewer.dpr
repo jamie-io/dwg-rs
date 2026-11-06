@@ -28,6 +28,7 @@ uses
   Winapi.ActiveX,
   System.SysUtils,
   System.Math,
+  System.Diagnostics,
   Dwg2Gltf in '..\..\..\bindings\delphi\Dwg2Gltf.pas',
   Dwg2Gltf.Math in 'Dwg2Gltf.Math.pas',
   Dwg2Gltf.Camera in 'Dwg2Gltf.Camera.pas',
@@ -143,6 +144,7 @@ var
   Line: TOverlayLine;
   Marker: TOverlayMarker;
   Fmt: TFormatSettings;
+  Watch: TStopwatch;
 begin
   Fmt := TFormatSettings.Invariant;
   W := 960;
@@ -193,13 +195,25 @@ begin
         [Base + '-' + ModeFileNames[Mode] + '.png', RenderModeNames[Mode], Renderer.DrawCalls]));
     end;
 
+    // frame time: 20 frames, waiting for the last one (ReadPixels)
+    Renderer.Mode := rmShadedEdges;
+    Renderer.Render(Target, Camera);
+    Target.ReadPixels;
+    Watch := TStopwatch.StartNew;
+    for I := 1 to 20 do
+      Renderer.Render(Target, Camera);
+    Target.ReadPixels;
+    Log(Format('shaded with edges: %.1f ms per frame', [Watch.Elapsed.TotalMilliseconds / 20], Fmt));
+
     if Option('--measure', S) then
     begin
       Parts := S.Split([',']);
       for I := 0 to 1 do
       begin
+        Watch := TStopwatch.StartNew;
         Snaps[I] := Doc.Picker.Snap(Camera, StrToFloat(Parts[2 * I], Fmt),
           StrToFloat(Parts[2 * I + 1], Fmt), 12);
+        Log(Format('snap %d took %.1f ms', [I + 1, Watch.Elapsed.TotalMilliseconds], Fmt));
         if Snaps[I].Kind = skNone then
           raise Exception.CreateFmt('nothing at pixel %s,%s', [Parts[2 * I], Parts[2 * I + 1]]);
         Log(Format('snap %d: %s at (%.4f, %.4f, %.4f) m, instance %d',
