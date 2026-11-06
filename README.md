@@ -287,7 +287,7 @@ Win64) and UTF-8 string helpers; typed pointers can be indexed
 Delphi:
 
 ```pascal
-uses Dwg2Gltf;
+uses SysUtils, Dwg2Gltf;
 var Scene: PDwgScene; Data: PDwgSceneData;
 begin
   if DwgOpenFile('chair.dwg', nil, Scene) <> DWG_OK then
