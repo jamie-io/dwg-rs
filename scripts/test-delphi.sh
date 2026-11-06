@@ -26,7 +26,7 @@ out="$target_dir/delphi-test"
 rm -rf "$out"
 mkdir -p "$out"
 
-cargo build --release --offline --target "$target" -p dwg2gltf-capi
+scripts/build-dll.sh >/dev/null
 cp "$target_dir/$target/release/dwg2gltf.dll" "$out/"
 
 # LayoutCheck.dpr and its expected output, generated from the Rust structs

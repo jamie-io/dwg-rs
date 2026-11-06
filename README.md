@@ -223,8 +223,8 @@ everything here, it is GPL-3.0-or-later.
 
 ```sh
 cargo build --release -p dwg2gltf-capi   # -> target/release/libdwg2gltf.so (and .a)
-cargo build --release -p dwg2gltf-capi --target x86_64-pc-windows-gnu
-                                         # -> target/x86_64-pc-windows-gnu/release/dwg2gltf.dll
+scripts/build-dll.sh                     # -> target/x86_64-pc-windows-gnu/release/dwg2gltf.dll
+                                         # (cargo build for x86_64-pc-windows-gnu, build paths stripped)
 ```
 
 `crates/dwg2gltf-capi` builds the converter as a shared library with a C
