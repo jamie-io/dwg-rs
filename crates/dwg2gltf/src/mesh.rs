@@ -24,7 +24,7 @@ pub const SMOOTH_DEGREES: f64 = 30.0;
 const OPEN_PIECE_WRAPS: f64 = 1e-3;
 
 /// How faces without stored UVs get texture coordinates.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Projection {
     /// OFML "auto" (OMATS 3.2 block mapping): per face along its dominant
     /// axis; U along Y on the X sides, along X on the Y and Z sides (DWG
@@ -94,6 +94,19 @@ pub struct Repairs {
     pub degenerate: usize,
 }
 
+type FrameKey = (Projection, [u64; 16]);
+
+/// What makes frames equal (`==`): their projection and the bits of their
+/// numbers, with -0.0 as 0.0. None for a frame with a NaN, which equals no
+/// frame.
+fn frame_key(f: &UvFrame) -> Option<FrameKey> {
+    if f.to_frame.iter().any(|x| x.is_nan()) {
+        return None;
+    }
+    let bits = f.to_frame.map(|x| if x == 0.0 { 0 } else { x.to_bits() });
+    Some((f.projection, bits))
+}
+
 pub struct TriangleBuilder {
     weld: f64,
     /// grid cell -> vertices in it
@@ -105,6 +118,9 @@ pub struct TriangleBuilder {
     /// per triangle: its own projection frame, an index into `frames`
     frame: Vec<Option<u32>>,
     frames: Vec<UvFrame>,
+    /// `frames` by [`frame_key`]: drawings give every entity a frame of its
+    /// own, too many to compare each new one with
+    frame_index: HashMap<FrameKey, u32>,
     frame_now: Option<u32>,
     /// cosine of the smoothing angle, per triangle
     smooth: Vec<f64>,
@@ -125,6 +141,7 @@ impl TriangleBuilder {
             uvs: vec![],
             frame: vec![],
             frames: vec![],
+            frame_index: HashMap::new(),
             frame_now: None,
             smooth: vec![],
             smooth_cos: SMOOTH_DEGREES.to_radians().cos(),
@@ -150,12 +167,17 @@ impl TriangleBuilder {
     /// The projection frame of the triangles added from now on (None: the
     /// projection given to [`TriangleBuilder::build`]).
     pub fn set_frame(&mut self, frame: Option<UvFrame>) {
-        self.frame_now = frame.map(|f| match self.frames.iter().position(|g| *g == f) {
-            Some(i) => i as u32,
-            None => {
-                self.frames.push(f);
-                self.frames.len() as u32 - 1
+        self.frame_now = frame.map(|f| {
+            let key = frame_key(&f);
+            if let Some(&i) = key.as_ref().and_then(|k| self.frame_index.get(k)) {
+                return i;
             }
+            self.frames.push(f);
+            let i = self.frames.len() as u32 - 1;
+            if let Some(key) = key {
+                self.frame_index.insert(key, i);
+            }
+            i
         });
     }
 
@@ -757,6 +779,62 @@ mod tests {
     /// A face in its own frame (a material mapper): projected in the
     /// frame's unit coordinates, ignoring the unit scale, before the v flip
     /// and the material transform; stored UVs still win.
+    fn shifted_frame(x: f64) -> UvFrame {
+        let mut to_frame = crate::geom::IDENTITY;
+        to_frame[3] = x;
+        UvFrame {
+            projection: Projection::Axis(2),
+            to_frame,
+        }
+    }
+
+    #[test]
+    fn equal_frames_are_kept_once() {
+        let mut b = TriangleBuilder::new(1e-9);
+        let (a, c) = (shifted_frame(1.0), shifted_frame(2.0));
+        let mut minus_zero = a;
+        minus_zero.to_frame[1] = -0.0;
+        let nan = shifted_frame(f64::NAN);
+        let mut seen = vec![];
+        for f in [a, c, minus_zero, a, nan, nan, c] {
+            b.set_frame(Some(f));
+            seen.push(b.frame_now.unwrap());
+        }
+        // -0.0 == 0.0; NaN equals nothing, not even itself
+        assert_eq!(seen, [0, 1, 0, 0, 2, 3, 1]);
+        assert_eq!(b.frames.len(), 4);
+        b.set_frame(None);
+        assert_eq!(b.frame_now, None);
+    }
+
+    /// Each entity may bring a frame of its own: four times the frames may
+    /// take about four times as long, not sixteen.
+    #[test]
+    fn many_frames_scale_linearly() {
+        let square = side([0.0, 0.0, 1.0]);
+        let time = |n: usize| {
+            (0..3)
+                .map(|_| {
+                    let start = std::time::Instant::now();
+                    let mut b = TriangleBuilder::new(1e-9);
+                    for k in 0..n {
+                        b.set_frame(Some(shifted_frame(k as f64)));
+                        b.add_polygon(&square, None, None);
+                    }
+                    assert_eq!(b.frames.len(), n);
+                    start.elapsed().as_secs_f64()
+                })
+                .fold(f64::INFINITY, f64::min)
+        };
+        let n = 20_000;
+        let (small, large) = (time(n), time(4 * n));
+        assert!(
+            large < 8.0 * small,
+            "{n} frames: {small:.3} s, {} frames: {large:.3} s",
+            4 * n
+        );
+    }
+
     #[test]
     fn faces_with_a_frame_project_in_it() {
         // a 170 x 240 rug top at z = 1, the frame spanning it once
