@@ -964,3 +964,76 @@ So the shown units only change on request.
   the unit), so its output equals `--units m`; every other file's equals the
   default.
 
+## 15. C interface and visible edges (2026-11-06)
+
+`crates/dwg2gltf-capi` is the converter as a shared library for native
+viewers (`include/dwg2gltf.h`, `bindings/delphi/Dwg2Gltf.pas`).
+
+- **No second conversion path**: a scene is `convert_document` as for a
+  GLB file (never compressed); the crate then copies the `GltfWriter`'s
+  document and binary buffer into flat arrays. So the scene and the GLB
+  (`dwg_scene_to_glb`, made from a clone of the writer on first use)
+  cannot disagree, and the GLB is byte for byte the command's.
+  `GltfWriter` only gained `Clone` and `binary()`.
+- **Meshes**: the primitives of one glTF mesh go into one vertex buffer,
+  one submesh each, indices widened to uint32 and made absolute. Line
+  primitives have no normals or UVs: those are zero. UVs are present
+  when any triangle submesh is textured (zero for the others). A base
+  color texture's transform is already in the UVs (section 3); only a
+  normal map can have its own `KHR_texture_transform`, which the material
+  carries.
+- **Nodes** are the glTF nodes in depth-first order from the root, so a
+  parent comes before its children. World matrices are computed in double
+  from the column-major glTF matrices; instances carry them as float.
+  The unit scale is the length of the root matrix's first column (the
+  units `--units auto` chose included).
+- **Options**: `DwgOptions` begins with its `size`; fields past the
+  caller's size take their defaults, so the struct can grow. All flags
+  clear and all fields zero is the default (lines on, edges on, an empty
+  drawing is an empty scene, as in the WebAssembly module). Units 0 is
+  "the drawing's"; overriding with INSUNITS 0 would mean meters, which
+  code 6 says as well. The curve deviation (0.1 mm) is a constant, not an
+  option.
+- **Errors and panics**: every function runs inside `catch_unwind` and
+  reports a status code, with the message in a thread-local string.
+  Conversion runs on a thread with a 256 MiB stack (reserved address
+  space): a host thread may have only 1 MiB, and recursion over nested
+  blocks and ACIS subtypes needs more (section 3.1).
+- **Layout**: every struct field sits at a multiple of its size, so C,
+  Rust `repr(C)` and Delphi (`{$ALIGN 8}`) agree without packing. A test
+  prints `sizeof`/`offsetof` of every field from the header with the C
+  compiler and compares them, and the `#define`s, with the Rust structs;
+  another does the same for the Delphi unit with Free Pascal (Delphi
+  mode), when installed, and runs `examples/delphi/SceneInfo.dpr` against
+  the Linux library. `scripts/test-delphi.sh` repeats that with
+  the Delphi compiler under Wine against the Windows DLL.
+- **Visible edges** (`edges.rs`), per mesh over all its triangle
+  submeshes:
+  - Weld positions within 1e-5 of the mesh's bounding box diagonal (grid
+    of that cell size, neighbouring cells searched), so vertices split for
+    normals, UVs or materials are one. Edge indices point at the first
+    vertex at a position.
+  - Drop triangles that collapse, have collinear corners, or repeat
+    another (also with the opposite winding, as a back face would).
+  - An edge with one triangle is a boundary, with three or more
+    non-manifold; with two it is a crease when the face normals differ by
+    more than the crease angle (30 degrees by default) and the vertex
+    normals of the two triangles differ along the edge (by more than about
+    2.6 degrees at either end). The face normals are compared as if the two
+    triangles were wound consistently (a pair running along the edge in
+    the same direction has one normal negated), because triangles of
+    different materials are oriented separately and a flat pair wound
+    oppositely must not count as a 180 degree fold.
+  - The vertex normals are the converter's own decision between smooth and
+    hard (ACIS surface normals, MESH normals or smoothing, 30 degree
+    smoothing elsewhere): a curved surface tessellated more coarsely than
+    the crease angle but shaded smooth shows no facet edges (a helix sweep
+    of a small circle had 174 edges by face angle alone, 32 with the
+    normals: its two end rims).
+  - A coplanar split therefore gives no edge, a smooth seam (cylinder)
+    none. BricsCAD solids at 30 degrees: box 12, wedge 9, cylinder 128
+    (two rims of 64 segments), cone 64 (its base rim), sphere and torus 0;
+    every one of them welds closed (no boundary edges). Two cylindrical
+    fillets meeting at a mitre show that seam (their faces fold by more
+    than 30 degrees there; at 60 degrees it goes).
+  - The meshes are shared out over the available cores.

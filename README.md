@@ -219,6 +219,101 @@ code. The module is about 1.3 MB with brotli. Conversion takes 1.3 to
 tests are in [its README](packages/three-dwg-loader/README.md). Like
 everything here, it is GPL-3.0-or-later.
 
+## C interface (dwg2gltf.dll)
+
+```sh
+cargo build --release -p dwg2gltf-capi   # -> target/release/libdwg2gltf.so (and .a)
+cargo build --release -p dwg2gltf-capi --target x86_64-pc-windows-gnu
+                                         # -> target/x86_64-pc-windows-gnu/release/dwg2gltf.dll
+```
+
+`crates/dwg2gltf-capi` builds the converter as a shared library with a C
+interface ([`include/dwg2gltf.h`](include/dwg2gltf.h), C99, every struct and
+function documented there). It is meant for native viewers: instead of a
+GLB to parse, the application gets the scene as arrays it can upload to the
+GPU directly, and can still save the GLB.
+
+```c
+#include "dwg2gltf.h"
+
+DwgOptions options;
+DwgScene *scene;
+dwg_options_init(&options);              /* or pass NULL for the defaults */
+if (dwg_scene_open_file("chair.dwg", &options, &scene) != DWG_OK) {
+    fprintf(stderr, "%s\n", dwg_last_error());
+    return 1;
+}
+const DwgSceneData *s = dwg_scene_data(scene);
+for (uint32_t i = 0; i < s->instance_count; i++) {
+    const DwgInstance *inst = &s->instances[i];
+    const DwgMesh *m = &s->meshes[inst->mesh];
+    /* m->positions, normals, uvs, indices; m->submeshes[k]: material and
+       index range; m->edges: visible edges as a line list; inst->world */
+}
+const uint8_t *glb; size_t len;
+dwg_scene_to_glb(scene, &glb, &len);     /* the GLB dwg2gltf would write */
+dwg_scene_free(scene);
+```
+
+- **Scene**: meshes (one per block and inherited style, as in the GLB:
+  float positions and normals, UVs when textured, uint32 indices, one
+  submesh per material with its index range, triangle and line
+  submeshes), nodes (the block instance tree: name, inserted block, DWG
+  handle, parent, local and world matrices in double), instances (each
+  node with a mesh, with its float world matrix), materials, textures (the
+  image files as stored, with their MIME type), warnings, the converter's
+  summary and counts, bounds and units.
+- **Frame**: glTF's, right-handed, Y up, meters; the unit scale and the
+  turn from DWG's Z up are in the root node's matrix. Matrices are
+  column-major, which is also the memory order of a Direct3D row-vector
+  matrix. Base colors are linear RGBA.
+- **Visible edges** per mesh: boundary, non-manifold and crease edges
+  (faces meeting at more than 30 degrees by default, `crease_angle`, where
+  the mesh is not shaded smooth), welded across seams, so a box has 12 and
+  a cylinder only its rims.
+- **Options** (`DwgOptions`, versioned by its `size` field; zero means
+  default): no lines, plan symbols, no edges, Z up, empty drawing is an
+  error, units (drawing, auto or an INSUNITS code), crease angle, limits.
+- Errors are status codes with a message (`dwg_last_error`, per thread);
+  panics are caught. Conversion runs on its own thread with a large stack.
+  A crash inside LibreDWG on a corrupt file ends the process.
+- `examples/c/scene_info.c` prints what a drawing gives
+  (`cargo test -p dwg2gltf-capi` compiles and runs it).
+
+**Delphi**: [`bindings/delphi/Dwg2Gltf.pas`](bindings/delphi/Dwg2Gltf.pas)
+declares the records and functions (`cdecl`, `external 'dwg2gltf.dll'`,
+Win64) and UTF-8 string helpers; typed pointers can be indexed
+(`Data.meshes[I]`). `examples/delphi/SceneInfo.dpr` is the C example in
+Delphi:
+
+```pascal
+uses Dwg2Gltf;
+var Scene: PDwgScene; Data: PDwgSceneData;
+begin
+  if DwgOpenFile('chair.dwg', nil, Scene) <> DWG_OK then
+    raise Exception.Create(DwgLastError);
+  Data := dwg_scene_data(Scene);
+  WriteLn(Data.instance_count, ' instances, ', Data.edge_count, ' edges');
+  dwg_scene_free(Scene);
+end.
+```
+
+Build it with `dcc64 SceneInfo.dpr` and put `dwg2gltf.dll` next to the
+executable. `scripts/test-delphi.sh` cross-builds the DLL, checks that the
+Delphi records have the Rust structs' sizes and offsets, and runs
+SceneInfo under Wine (`DCC64` names the compiler command).
+
+**Windows DLL**: cross-compiled on Linux with the Rust target
+`x86_64-pc-windows-gnu` (`rustup target add x86_64-pc-windows-gnu`) and
+mingw-w64 (`x86_64-w64-mingw32-gcc`, which the `cc` crate and rustc pick
+for that target by themselves; set `CC_x86_64_pc_windows_gnu` and the
+target's `linker` for another one). The DLL exports only the `dwg_*`
+functions and imports only Windows system DLLs (kernel32, ntdll and the
+Universal C Runtime), so it needs no mingw runtime next to it; a Delphi
+application loads it by name, without an import library. Building on
+Windows with the `x86_64-pc-windows-msvc` target should work the same way
+(the `cc` crate drives MSVC for LibreDWG) but has not been tried.
+
 ## What gets converted
 
 | DWG | glTF |
@@ -330,12 +425,16 @@ material flag bits in swapped order.
 ```
 crates/dwg2gltf/            the converter library and the dwg2gltf / gltf2dwg commands
 crates/dwg2gltf-wasm/       the WebAssembly module's C ABI for the three.js loader
+crates/dwg2gltf-capi/       the shared library's C interface (dwg2gltf.dll, libdwg2gltf.so)
+include/                    its C header
+bindings/delphi/            its Delphi unit
+examples/                   C and Delphi examples of the shared library
 crates/libredwg-sys/        LibreDWG bindings, vendored C sources and their patches
 packages/three-dwg-loader/  three.js loader and exporter (npm package, WebAssembly)
 tools/qa/                   comparison of converted GLBs with reference GLBs (qa.py) and its helpers
 tests/bricscad/             generated BricsCAD drawings and their exact expected values
 docs/                       implementation notes
-scripts/                    build-wasm.sh
+scripts/                    build-wasm.sh, test-delphi.sh
 vendor/                     vendored Rust crates (offline builds)
 ```
 
@@ -353,6 +452,8 @@ QA runs.
 | `dwg2gltf::acis` | AcDs section, SAB/SAT tokens, B-rep, NURBS, tessellation |
 | `dwg2gltf::input`, `export`, `dwg_writer`, `ofml` | glTF/OBJ/STL reading, DWG writing (`gltf2dwg`), the OFML records and material archives |
 | `dwg2gltf-wasm` | the WebAssembly module's C ABI (`dgl_*`) for the three.js loader and exporter |
+| `dwg2gltf-capi` | the shared library's C interface (`dwg_*`): scene arrays, visible edges, GLB |
+| `dwg2gltf::edges` | visible edges of a mesh (boundary, non-manifold, crease) |
 | `packages/three-dwg-loader` | `DWGLoader`, `DWGExporter`, their shared worker pool, the WASI shim, demo and Node tests |
 
 [docs/IMPLEMENTATION_NOTES.md](docs/IMPLEMENTATION_NOTES.md) has the
@@ -365,6 +466,7 @@ the tessellation algorithm and the verification workflow.
 cargo test --release                # unit tests, synthetic drawings, BricsCAD drawings
 cargo clippy --all-targets
 cargo test -p dwg2gltf-wasm         # the WebAssembly module's C ABI, natively
+cargo test -p dwg2gltf-capi         # the C interface, its header layout, the C example
 scripts/build-wasm.sh && (cd packages/three-dwg-loader && npm install && npm test)   # wasm against the CLI
 ```
 
