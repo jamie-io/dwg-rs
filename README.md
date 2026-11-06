@@ -385,8 +385,10 @@ and `PickingTest.dpr` (picking against brute force, camera rays and
 projection, snapping, without a GPU) with `DCC64`, runs the test under
 Wine and renders BricsCAD test drawings in every mode into
 `target/delphi-viewer/`. Wine's Direct3D 11 runs on OpenGL or Vulkan and
-needs a display; it has no WARP (`--warp` uses the GPU there). Compiled
-with Delphi 13 (dcc64).
+needs a display; it has no WARP (`--warp` uses the GPU there). Under Wine
+on a Wayland desktop the first frame after the window opens may not show
+until the next repaint (any mouse or mode key). Compiled with Delphi 13
+(dcc64).
 
 Not done: silhouette lines (the DLL's edges leave smooth curved surfaces
 without lines, so hidden line shows only their rims), normal maps,
