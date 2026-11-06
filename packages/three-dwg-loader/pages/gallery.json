@@ -1,0 +1,140 @@
+{
+	"start": "trim_crossing_AC1032",
+	"groups": [
+		{
+			"title": "ACIS solids",
+			"items": [
+				{
+					"file": "trim/trim_crossing/trim_crossing_AC1032.dwg",
+					"title": "Crossing cylinders"
+				},
+				{
+					"file": "trim/trim_cut_torus/trim_cut_torus_AC1032.dwg",
+					"title": "Cut torus"
+				},
+				{
+					"file": "trim/trim_cut_cone/trim_cut_cone_AC1032.dwg",
+					"title": "Cut cone"
+				},
+				{
+					"file": "trim/trim_cylinder_hole/trim_cylinder_hole_AC1032.dwg",
+					"title": "Cylinder with hole"
+				},
+				{
+					"file": "primitive/torus/torus_AC1032.dwg",
+					"title": "Torus"
+				},
+				{
+					"file": "primitive/cone/cone_AC1032.dwg",
+					"title": "Cone"
+				},
+				{
+					"file": "primitive/sphere/sphere_AC1032.dwg",
+					"title": "Sphere"
+				},
+				{
+					"file": "fillet/fillet_large/fillet_large_AC1032.dwg",
+					"title": "Filleted box"
+				},
+				{
+					"file": "fillet/fillet_cushion/fillet_cushion_AC1032.dwg",
+					"title": "Cushion"
+				},
+				{
+					"file": "loft/loft_three/loft_three_AC1032.dwg",
+					"title": "Loft, three sections"
+				},
+				{
+					"file": "loft/loft_circle_square/loft_circle_square_AC1032.dwg",
+					"title": "Loft, circle to square"
+				},
+				{
+					"file": "revolve/revolve_ring_360/revolve_ring_360_AC1032.dwg",
+					"title": "Revolved ring"
+				},
+				{
+					"file": "revolve/revolve_half_disc_180/revolve_half_disc_180_AC1032.dwg",
+					"title": "Revolved half disc"
+				},
+				{
+					"file": "sweep/sweep_circle_helix/sweep_circle_helix_AC1032.dwg",
+					"title": "Swept helix"
+				},
+				{
+					"file": "sweep/sweep_circle_spline/sweep_circle_spline_AC1032.dwg",
+					"title": "Swept spline"
+				},
+				{
+					"file": "tube/tube_270/tube_270_AC1032.dwg",
+					"title": "Tube, 270° bend"
+				},
+				{
+					"file": "tube/tube_hollow/tube_hollow_AC1032.dwg",
+					"title": "Hollow tube"
+				},
+				{
+					"file": "tube/tube_thick/tube_thick_AC1032.dwg",
+					"title": "Thick tube"
+				}
+			]
+		},
+		{
+			"title": "Surfaces, regions and meshes",
+			"items": [
+				{
+					"file": "surface/surface_lofted/surface_lofted_AC1032.dwg",
+					"title": "Lofted surface"
+				},
+				{
+					"file": "surface/surface_revolved/surface_revolved_AC1032.dwg",
+					"title": "Revolved surface"
+				},
+				{
+					"file": "surface/surface_swept/surface_swept_AC1032.dwg",
+					"title": "Swept surface"
+				},
+				{
+					"file": "region/region_two_holes/region_two_holes_AC1032.dwg",
+					"title": "Region with holes"
+				},
+				{
+					"file": "sheet/sheet_wavy_mesh/sheet_wavy_mesh_AC1032.dwg",
+					"title": "Wavy mesh"
+				},
+				{
+					"file": "sheet/sheet_wavy_pface/sheet_wavy_pface_AC1032.dwg",
+					"title": "Wavy polyface mesh"
+				}
+			]
+		},
+		{
+			"title": "Older DWG versions",
+			"items": [
+				{
+					"file": "trim/trim_sphere_hole/trim_sphere_hole_AC1014.dwg",
+					"title": "Sphere with hole"
+				},
+				{
+					"file": "loft/loft_two/loft_two_AC1015.dwg",
+					"title": "Loft, two sections"
+				},
+				{
+					"file": "tube/tube_090/tube_090_AC1018.dwg",
+					"title": "Tube, 90° bend"
+				},
+				{
+					"file": "trim/trim_cylinder_hole_seam/trim_cylinder_hole_seam_AC1021.dwg",
+					"title": "Cylinder, hole on seam"
+				},
+				{
+					"file": "region/region_hole/region_hole_AC1024.dwg",
+					"title": "Region with hole"
+				},
+				{
+					"file": "tube/tube_swept_bend/tube_swept_bend_AC1027.dwg",
+					"title": "Swept tube bend"
+				}
+			]
+		}
+	]
+}

@@ -22,6 +22,11 @@ if [ ! -x "$WASI_SDK_PATH/bin/wasm32-wasip1-clang" ]; then
     exit 1
 fi
 
+# source paths end up in the module (panic locations, C __FILE__): make them
+# relative to the repository instead of this checkout
+export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }--remap-path-prefix=$PWD=/dwg-rs"
+export CFLAGS_wasm32_wasip1="${CFLAGS_wasm32_wasip1:+$CFLAGS_wasm32_wasip1 }-ffile-prefix-map=$PWD=/dwg-rs"
+
 out_dir=packages/three-dwg-loader/wasm
 mkdir -p "$out_dir"
 if [ "${1:-}" = "--dev" ]; then
