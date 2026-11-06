@@ -452,6 +452,19 @@ fn least_area(pts: &[Vec3], normal: Vec3) -> Vec<[usize; 3]> {
 /// Returns the rings concatenated in order [outer, holes...] and index
 /// triples into them. Holes are joined to the outer ring by bridge edges.
 pub fn triangulate_2d(outer: &[Vec2], holes: &[Vec<Vec2>]) -> (Vec<Vec2>, Triangulation) {
+    triangulate_2d_flat(outer, holes, 0.0)
+}
+
+/// [`triangulate_2d`] for rings whose straight runs carry rounding noise:
+/// a corner whose sine is at most `flat` counts as straight, so it is no
+/// ear, and no diagonal leaves a vertex at such an angle to the boundary
+/// (it would cut off a sliver of zero area, triangulated as a fan of
+/// zero-area triangles). 0 is plain [`triangulate_2d`].
+pub fn triangulate_2d_flat(
+    outer: &[Vec2],
+    holes: &[Vec<Vec2>],
+    flat: f64,
+) -> (Vec<Vec2>, Triangulation) {
     let mut pts: Vec<Vec2> = outer.to_vec();
     let mut rings: Vec<Vec<usize>> = Vec::with_capacity(holes.len());
     for hole in holes {
@@ -518,9 +531,20 @@ pub fn triangulate_2d(outer: &[Vec2], holes: &[Vec<Vec2>]) -> (Vec<Vec2>, Triang
         poly = seq;
     }
     let p2: Vec<Vec2> = poly.iter().map(|&i| pts[i]).collect();
-    let mut tri = earclip(&p2, &poly);
+    let mut tri = earclip_flat(&p2, &poly, flat);
     tri.degraded |= dropped;
     (pts, tri)
+}
+
+/// |sin| of the angle at `o` between the directions to `a` and `b` (0 for a
+/// zero-length side).
+fn sine(o: Vec2, a: Vec2, b: Vec2) -> f64 {
+    let l = (d2_2(o, a) * d2_2(o, b)).sqrt();
+    if l > 0.0 {
+        orient(o, a, b).abs() / l
+    } else {
+        0.0
+    }
 }
 
 fn d2_2(a: Vec2, b: Vec2) -> f64 {
@@ -571,6 +595,10 @@ fn blocks(p: Vec2, q: Vec2, a: Vec2, b: Vec2) -> bool {
 /// remainder is split along a diagonal inside it, and only as a last resort
 /// fanned (keeping just the correctly wound triangles).
 pub fn earclip(p2: &[Vec2], ids: &[usize]) -> Triangulation {
+    earclip_flat(p2, ids, 0.0)
+}
+
+fn earclip_flat(p2: &[Vec2], ids: &[usize], flat: f64) -> Triangulation {
     let n = p2.len();
     let mut out = Triangulation::default();
     if n < 3 {
@@ -594,7 +622,7 @@ pub fn earclip(p2: &[Vec2], ids: &[usize]) -> Triangulation {
     }
     // bounds the diagonal search (quadratic per remainder)
     let mut budget = 20_000_000usize;
-    clip(p2, (0..n).collect(), eps, &mut budget, &mut out);
+    clip(p2, (0..n).collect(), eps, flat, &mut budget, &mut out);
     absorb_unused(p2, n, &mut out.tris);
     // a fallback is only a defect where the triangles miss or double area
     // (a zero-area slit polygon rightly gives nothing)
@@ -653,8 +681,19 @@ fn absorb_unused(p2: &[Vec2], n: usize, tris: &mut Vec<[usize; 3]>) {
     }
 }
 
-fn clip(p2: &[Vec2], mut idx: Vec<usize>, eps: f64, budget: &mut usize, out: &mut Triangulation) {
+fn clip(
+    p2: &[Vec2],
+    mut idx: Vec<usize>,
+    eps: f64,
+    flat: f64,
+    budget: &mut usize,
+    out: &mut Triangulation,
+) {
     let area2 = |a: usize, b: usize, c: usize| orient(p2[a], p2[b], p2[c]);
+    // a corner that clearly turns left
+    let convex = |a: usize, b: usize, c: usize| {
+        area2(a, b, c) > eps && (flat == 0.0 || sine(p2[b], p2[c], p2[a]) > flat)
+    };
     let inside = |p: usize, a: usize, b: usize, c: usize| {
         area2(a, b, p) >= 0.0 && area2(b, c, p) >= 0.0 && area2(c, a, p) >= 0.0
     };
@@ -681,13 +720,19 @@ fn clip(p2: &[Vec2], mut idx: Vec<usize>, eps: f64, budget: &mut usize, out: &mu
         let reflex: Vec<usize> = (0..m)
             .filter(|&k| {
                 let (a, b, c) = corner(k);
-                area2(a, b, c) <= eps
+                !convex(a, b, c)
             })
             .map(|k| idx[k])
             .collect();
         let ear = (0..m).map(|i| (from + i) % m).find(|&k| {
             let (a, b, c) = corner(k);
-            area2(a, b, c) > eps
+            // nor may its new side run along the boundary at either end:
+            // the rest would start with a sliver of zero area
+            let (before, after) = (idx[(k + m - 2) % m], idx[(k + 2) % m]);
+            convex(a, b, c)
+                && (flat == 0.0
+                    || (sine(p2[a], p2[c], p2[before]) > flat
+                        && sine(p2[c], p2[a], p2[after]) > flat))
                 && !reflex.iter().any(|&p| {
                     p != a
                         && p != b
@@ -710,12 +755,17 @@ fn clip(p2: &[Vec2], mut idx: Vec<usize>, eps: f64, budget: &mut usize, out: &mu
             idx.remove(k);
             continue;
         }
-        if let Some((i, j)) = find_diagonal(p2, &idx, budget) {
+        if let Some((i, j)) = find_diagonal(p2, &idx, flat, budget) {
             let a: Vec<usize> = idx[i..=j].to_vec();
             let mut b: Vec<usize> = idx[j..].to_vec();
             b.extend_from_slice(&idx[..=i]);
-            clip(p2, a, eps, budget, out);
-            clip(p2, b, eps, budget, out);
+            clip(p2, a, eps, flat, budget, out);
+            clip(p2, b, eps, flat, budget, out);
+            return;
+        }
+        if flat > 0.0 {
+            // straight corners everywhere: as without the bound
+            clip(p2, idx, eps, 0.0, budget, out);
             return;
         }
         out.degraded = true;
@@ -730,7 +780,12 @@ fn clip(p2: &[Vec2], mut idx: Vec<usize>, eps: f64, budget: &mut usize, out: &mu
 
 /// A diagonal (i < j, positions in `idx`) that runs inside the polygon
 /// without touching its boundary.
-fn find_diagonal(p2: &[Vec2], idx: &[usize], budget: &mut usize) -> Option<(usize, usize)> {
+fn find_diagonal(
+    p2: &[Vec2],
+    idx: &[usize],
+    flat: f64,
+    budget: &mut usize,
+) -> Option<(usize, usize)> {
     let m = idx.len();
     let at = |k: usize| p2[idx[k % m]];
     for i in 0..m {
@@ -749,10 +804,79 @@ fn find_diagonal(p2: &[Vec2], idx: &[usize], budget: &mut usize) -> Option<(usiz
             {
                 continue;
             }
+            // not along the boundary at either end
+            if flat > 0.0
+                && [
+                    (p, q, at(i + m - 1), at(i + 1)),
+                    (q, p, at(j + m - 1), at(j + 1)),
+                ]
+                .iter()
+                .any(|&(v, w, a, b)| sine(v, w, a) <= flat || sine(v, w, b) <= flat)
+            {
+                continue;
+            }
             if (0..m).all(|k| !blocks(p, q, at(k), at(k + 1))) {
                 return Some((i, j));
             }
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A narrow strip (as a spline's uv domain often is: one parameter
+    /// spans a fraction of the other) whose top run is straight, but the
+    /// corners at its ends lie a rounding error below it.
+    fn noisy_strip() -> Vec<Vec2> {
+        let mut ring = vec![[0.0, 1.0 - 4.5e-9]];
+        for i in (1..8).rev() {
+            ring.push([0.0, i as f64 * 0.125]);
+        }
+        for i in 0..10 {
+            ring.push([i as f64 * 0.005, 0.0]);
+        }
+        for i in 0..8 {
+            ring.push([0.05, i as f64 * 0.125]);
+        }
+        ring.push([0.05, 1.0 - 4e-9]);
+        for i in 1..33 {
+            ring.push([0.05 - i as f64 * 0.0015, 1.0]);
+        }
+        ring
+    }
+
+    fn flattest(pts: &[Vec2], tris: &[[usize; 3]]) -> f64 {
+        tris.iter()
+            .map(|&[a, b, c]| {
+                let (p, q, r) = (pts[a], pts[b], pts[c]);
+                sine(p, q, r).max(sine(q, r, p)).max(sine(r, p, q))
+            })
+            .fold(f64::INFINITY, f64::min)
+    }
+
+    #[test]
+    fn flat_bound_keeps_noisy_runs_out_of_ears_and_diagonals() {
+        let ring = noisy_strip();
+        let area = |pts: &[Vec2], tris: &[[usize; 3]]| -> f64 {
+            tris.iter()
+                .map(|&[a, b, c]| orient(pts[a], pts[b], pts[c]) / 2.0)
+                .sum()
+        };
+        let (pts, plain) = triangulate_2d(&ring, &[]);
+        assert!(
+            flattest(&pts, &plain.tris) < 1e-6,
+            "the noise gives zero-area triangles"
+        );
+        let (pts, tri) = triangulate_2d_flat(&ring, &[], 1e-5);
+        assert!(!tri.degraded);
+        assert!((area(&pts, &tri.tris) - 0.05).abs() < 1e-6);
+        assert!(
+            flattest(&pts, &tri.tris) > 1e-4,
+            "{}",
+            flattest(&pts, &tri.tris)
+        );
+    }
 }

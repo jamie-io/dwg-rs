@@ -3,6 +3,7 @@
 ## 2026-11-06
 
 - ACIS curved faces take far fewer triangles where the surface parameterisation is stretched (spline surfaces, some tori): refinement works in the surface's own metric, and conversions of such drawings run many times faster
+- ACIS faces whose boundary runs along a spline's domain edge no longer show gaps from folded triangles along that edge
 - scripts/build-dll.sh builds dwg2gltf.dll for Windows without the build machine's paths in it
 - QA runs compare only drawings whose GLB changed, start with the slowest drawings and use all cores when memory allows
 - C interface: dwg2gltf.dll / libdwg2gltf.so (`crates/dwg2gltf-capi`, `include/dwg2gltf.h`) with the scene as arrays for native viewers (meshes, instance tree, materials, textures, warnings, bounds) and the GLB

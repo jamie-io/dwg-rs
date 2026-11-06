@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 use super::brep::{Body, Curve, Edge, Face, Loop, Surface, SurfaceDef, best_pipe, best_spline};
 use crate::geom::{
     Vec2, Vec3, ZERO, add, cross, dist2, dot, length, mul, newell_normal, normalize, sub,
-    triangulate_2d,
+    triangulate_2d, triangulate_2d_flat,
 };
 use crate::limits::MAX_TRIANGLES_PER_FACE;
 
@@ -28,6 +28,16 @@ const RELATIVE_DEVIATION: f64 = 1e-3;
 /// face whose uv triangles do not follow its surface (a parameterisation
 /// that folds or jumps) keeps the same deviation however often it is split.
 const STALL_ROUNDS: usize = 8;
+
+/// Corners of a curved face's uv boundary whose sine (in the surface's
+/// metric) is at most this count as straight when the face is ear-clipped:
+/// no ear tips, no diagonal along them. A straight boundary run in uv (a
+/// spline's domain edge, curved on the surface) carries rounding noise of
+/// about 1e-9; clipped by its sign it became fans of zero-area uv
+/// triangles, on the surface fins folding across the boundary curve and
+/// showing as gaps. A sampled arc's corners stay far above it (the sine of
+/// the angle step, 1.5e-3 at 4096 steps per turn).
+const FLAT_CORNER: f64 = 1e-5;
 
 pub type Tri = [Vec3; 3];
 
@@ -451,7 +461,21 @@ impl Tessellator {
             holes_uv.push(uv);
             xyz_all.extend(xyz);
         }
-        let (uv_all, tri) = triangulate_2d(&outer_uv, &holes_uv);
+        let (uv_all, mut tri) = triangulate_2d(&outer_uv, &holes_uv);
+        if let Some(l) = stretched(surf)
+            .then(|| uv_metric(surf, &outer_uv))
+            .flatten()
+        {
+            // again in the surface's metric, with straight runs kept out of
+            // ears and diagonals (the triangles index the same rings); taken
+            // where it covers the polygon at least as fully
+            let map = |ring: &[Vec2]| -> Vec<Vec2> { ring.iter().map(|&q| l(q)).collect() };
+            let holes: Vec<Vec<Vec2>> = holes_uv.iter().map(|h| map(h)).collect();
+            let (_, flat) = triangulate_2d_flat(&map(&outer_uv), &holes, FLAT_CORNER);
+            if !flat.degraded && flat.tris.len() >= tri.tris.len() {
+                tri = flat;
+            }
+        }
         if tri.degraded {
             self.degraded_faces += 1;
         }
@@ -724,15 +748,8 @@ impl Tessellator {
                         .all(|d| length(sub(surf.eval(q[0] + d, q[1]), p)) <= 1e-9 * size)
             })
             .collect();
-        // the surface's own metric where uv may be stretched: a torus's u is
-        // the angle times the ring radius (the tube may be far wider), a
-        // spline's parameters can be anything. A cone's and a sphere's u
-        // and v are lengths on the surface (stretched only towards an apex
-        // or a pole, which costs a few triangles there): they keep plain uv
-        let stretched = matches!(
-            surf,
-            Surface::Torus(_) | Surface::Spline(_) | Surface::Pipe(_)
-        );
+        // the surface's own metric where uv may be stretched
+        let stretched = stretched(surf);
         let h = [1e-6 * extent(0, &uv), 1e-6 * extent(1, &uv)];
         let measure = |q: Vec2| surface_metric(surf, q, h);
         let mut metric: Vec<[f64; 3]> = if stretched {
@@ -1329,9 +1346,43 @@ fn surface_metric(surf: &Surface, q: Vec2, h: Vec2) -> [f64; 3] {
     [dot(su, su), dot(su, sv), dot(sv, sv)]
 }
 
+/// Whether uv may be stretched against the surface, so that triangulating
+/// and refining in it needs the surface's own metric: a torus's u is the
+/// angle times the ring radius (the tube may be far wider), a spline's
+/// parameters can be anything. A cone's and a sphere's u and v are lengths
+/// on the surface (stretched only towards an apex or a pole, which costs a
+/// few triangles there): they keep plain uv.
+fn stretched(surf: &Surface) -> bool {
+    matches!(
+        surf,
+        Surface::Torus(_) | Surface::Spline(_) | Surface::Pipe(_)
+    )
+}
+
+/// The map from uv to lengths on the surface for a whole face: by the mean
+/// first fundamental form at its boundary points.
+fn uv_metric(surf: &Surface, ring: &[Vec2]) -> Option<impl Fn(Vec2) -> Vec2> {
+    let extent = |k: usize| {
+        let (lo, hi) = ring
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), q| {
+                (lo.min(q[k]), hi.max(q[k]))
+            });
+        hi - lo
+    };
+    let h = [1e-6 * extent(0), 1e-6 * extent(1)];
+    let mut m = [0.0; 3];
+    for &q in ring {
+        let f = surface_metric(surf, q, h);
+        for k in 0..3 {
+            m[k] += f[k] / ring.len() as f64;
+        }
+    }
+    metric_map(m)
+}
+
 /// The linear map that takes uv to lengths on the surface around four
-/// points: the upper triangular factor L of their mean first fundamental
-/// form M (|L q|^2 = q^T M q). None where M is degenerate (all at a pole).
+/// points: by their mean first fundamental form.
 fn quad_metric(metric: &[[f64; 3]], ids: [usize; 4]) -> Option<impl Fn(Vec2) -> Vec2> {
     let mut m = [0.0; 3];
     for i in ids {
@@ -1339,6 +1390,12 @@ fn quad_metric(metric: &[[f64; 3]], ids: [usize; 4]) -> Option<impl Fn(Vec2) -> 
             m[k] += metric[i][k] / 4.0;
         }
     }
+    metric_map(m)
+}
+
+/// The upper triangular factor L of a first fundamental form M = [E, F, G]
+/// as a map (|L q|^2 = q^T M q). None where M is degenerate (at a pole).
+fn metric_map(m: [f64; 3]) -> Option<impl Fn(Vec2) -> Vec2> {
     let [e, f, g] = m;
     if !(e > 0.0 && g > 0.0) {
         return None;

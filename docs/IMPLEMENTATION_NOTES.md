@@ -539,6 +539,17 @@ there are no parameters (SAT 4.0), project the vertices onto the curve.
    the last resort and then only with forward triangles; boundary vertices
    left over on a straight run are inserted into the triangle edge they lie
    on. A zero-area loop (out and back along itself) gives nothing.
+   Torus, spline and pipe faces are ear-clipped in the surface's metric
+   (the mean first fundamental form of the boundary points), and a corner
+   whose sine is at most 1e-5 counts as straight: it is no ear tip, and no
+   ear side or diagonal may run along the boundary from it. A spline's
+   domain edge is straight in uv but carries rounding noise of about 1e-9
+   after inversion; clipped by the sign of that noise, it became a fan of
+   zero-area uv triangles, on the surface fins folding across the curved
+   edge (gaps along a seat's front edge). The bounded triangulation is
+   used only where it covers the polygon at least as fully as the plain
+   one (not degraded, as many triangles); a sub-polygon whose corners are
+   all straight is clipped without the bound.
 5. Lawson edge flips to Delaunay (planes too), then split interior edges
    whose surface midpoint lies further than the tolerance from the edge
    (less the distance the end points lie off the surface: a spline that
