@@ -167,6 +167,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dwg2gltf-capi"
+version = "0.1.0"
+dependencies = [
+ "dwg2gltf",
+ "serde_json",
+]
+
+[[package]]
 name = "dwg2gltf-wasm"
 version = "0.1.0"
 dependencies = [

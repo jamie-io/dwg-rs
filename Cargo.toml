@@ -1,7 +1,12 @@
 [workspace]
-members = ["crates/dwg2gltf", "crates/dwg2gltf-wasm", "crates/libredwg-sys"]
+members = [
+    "crates/dwg2gltf",
+    "crates/dwg2gltf-capi",
+    "crates/dwg2gltf-wasm",
+    "crates/libredwg-sys",
+]
 # the WebAssembly module is built by scripts/build-wasm.sh
-default-members = ["crates/dwg2gltf", "crates/libredwg-sys"]
+default-members = ["crates/dwg2gltf", "crates/dwg2gltf-capi", "crates/libredwg-sys"]
 resolver = "3"
 
 [workspace.package]

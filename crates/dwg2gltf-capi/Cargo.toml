@@ -1,0 +1,19 @@
+[package]
+name = "dwg2gltf-capi"
+description = "dwg2gltf as a shared library with a C interface (dwg2gltf.dll, libdwg2gltf.so): scene arrays for viewers, and GLB export"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+# dwg2gltf.dll / libdwg2gltf.so / libdwg2gltf.a
+name = "dwg2gltf"
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+# WebP (libwebp) is only for compressed GLBs, which the scene does not use
+converter = { package = "dwg2gltf", path = "../dwg2gltf", default-features = false }
+serde_json = { version = "1.0.152", features = ["preserve_order"] }
