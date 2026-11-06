@@ -110,6 +110,7 @@ impl TextureTransform {
     }
 }
 
+#[derive(Clone)]
 pub struct GltfWriter {
     doc: Map<String, Value>,
     bin: Vec<u8>,
@@ -333,6 +334,12 @@ impl GltfWriter {
 
     pub fn document(&self) -> &Map<String, Value> {
         &self.doc
+    }
+
+    /// The binary buffer the document's buffer views point into (not yet
+    /// padded to its final length).
+    pub fn binary(&self) -> &[u8] {
+        &self.bin
     }
 
     /// The scene's bounding box in world coordinates: every POSITION

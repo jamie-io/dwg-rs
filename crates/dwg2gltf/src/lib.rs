@@ -11,6 +11,7 @@ mod compress;
 pub mod convert;
 pub mod dwg;
 pub mod dwg_writer;
+pub mod edges;
 pub mod export;
 pub mod files;
 pub mod geom;
