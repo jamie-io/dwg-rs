@@ -388,6 +388,8 @@ pub struct Document {
     insunits: i32,
     by_handle: HashMap<Handle, usize>,
     owned: OnceCell<HashMap<Handle, Vec<usize>>>,
+    /// Entities by their owner handle, in file order.
+    by_owner: OnceCell<HashMap<Handle, Vec<usize>>>,
     pub layers: HashMap<Handle, Layer>,
     pub model_space: Option<usize>,
     /// LibreDWG's recoverable decode errors (see [`Drawing::decode_error`]).
@@ -425,6 +427,7 @@ impl Document {
             insunits,
             by_handle,
             owned: OnceCell::new(),
+            by_owner: OnceCell::new(),
             layers: HashMap::new(),
             model_space: None,
             decode_error,
@@ -594,8 +597,13 @@ impl Document {
         }
         let is_kind =
             |o: &Object| matches!(o.data, Data::Entity(_)) && o.kind.starts_with(kind_prefix);
-        let found: Vec<usize> = (0..self.objects.len())
-            .filter(|&i| is_kind(&self.objects[i]) && self.objects[i].owner == p.handle)
+        let found: Vec<usize> = self
+            .owned_entities()
+            .get(&p.handle)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|&i| is_kind(&self.objects[i]))
             .collect();
         if !found.is_empty() {
             return found;
@@ -603,16 +611,23 @@ impl Document {
         let (Some(first), Some(last)) = (self.index(*first), self.index(*last)) else {
             return vec![];
         };
-        let mut out = vec![];
-        for i in 0..self.objects.len() {
-            if i >= first && is_kind(&self.objects[i]) {
-                out.push(i);
+        (first..=last)
+            .filter(|&i| is_kind(&self.objects[i]))
+            .collect()
+    }
+
+    /// The entities of each owner, built once: looking them up per polyline
+    /// would scan the whole drawing for every one.
+    fn owned_entities(&self) -> &HashMap<Handle, Vec<usize>> {
+        self.by_owner.get_or_init(|| {
+            let mut by_owner: HashMap<Handle, Vec<usize>> = HashMap::new();
+            for (i, obj) in self.objects.iter().enumerate() {
+                if matches!(obj.data, Data::Entity(_)) {
+                    by_owner.entry(obj.owner).or_default().push(i);
+                }
             }
-            if i == last {
-                break;
-            }
-        }
-        out
+            by_owner
+        })
     }
 
     // -- layers ------------------------------------------------------------
