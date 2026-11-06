@@ -21,7 +21,7 @@ implementation
 
 uses
   Winapi.Windows, Winapi.Messages, Winapi.CommCtrl, Winapi.CommDlg, Winapi.ShellAPI,
-  System.SysUtils, System.Math, System.Types,
+  System.SysUtils, System.Math, System.Types, System.Classes,
   Dwg2Gltf, Dwg2Gltf.Math, Dwg2Gltf.Camera, Dwg2Gltf.D3D11, Dwg2Gltf.Renderer,
   Dwg2Gltf.Picking, ViewerDocument;
 
@@ -35,14 +35,41 @@ const
   IDM_ORTHO = 421;
   IDM_MEASURE = 500;
   IDM_CLEAR = 501;
+  IDM_OUTLINES = 502;
 
+  WM_OPENED = WM_APP + 1; // a conversion finished: LParam is its TOpenResult
+  TIMER_REPAINT = 1;
+  TIMER_PROGRESS = 2;
+
+  // in 96-DPI pixels, scaled by the window's DPI
   TreeWidth = 300;
-  SnapRadius = 12; // pixels
+  SnapRadius = 12;
   MeasureColor: TColor4 = (0.0, 0.85, 0.25, 1);
   HoverColor: TColor4 = (1.0, 0.85, 0.0, 1);
 
 type
   TDrag = (dgNone, dgOrbit, dgPan);
+
+  { What a conversion thread hands back to the window. }
+  TOpenResult = class
+    FileName: string;
+    Generation: Integer;
+    Doc: TViewerDocument;
+    Error: string;
+  end;
+
+  { Converts a drawing off the UI thread: dwg2gltf.dll may take seconds for
+    a large drawing, the window stays responsive meanwhile. The GPU upload
+    happens on the UI thread when the result arrives. }
+  TOpenThread = class(TThread)
+  private
+    FResult: TOpenResult;
+    FWindow: HWND;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(Window: HWND; R: TOpenResult);
+  end;
 
   TViewer = class
   private
@@ -63,6 +90,16 @@ type
     FHover: TSnap;
     FNodeItems: TArray<HTREEITEM>;
     FFilled: TArray<Boolean>; // tree item's children inserted
+    FScale: Double;           // DPI / 96
+    FFont: HFONT;
+    FFreshFrames: Integer;    // frames presented since the window was shown
+    FGeneration: Integer;     // of the latest Open; older results are dropped
+    FOpening: string;         // the drawing being converted, '' for none
+    FOpenStart: Cardinal;
+    procedure UpdateDpi;
+    procedure Opened(R: TOpenResult);
+    procedure ShowProgress;
+    procedure CancelOpen;
     procedure CreateWindows;
     procedure CreateGraphics;
     procedure FreeGraphics;
@@ -125,6 +162,27 @@ begin
                 Viewer.TreeSelected(Notify.itemNew.lParam);
           end;
       end;
+    WM_OPENED:
+      if Viewer <> nil then
+        Viewer.Opened(TOpenResult(LParam))
+      else
+      begin
+        TOpenResult(LParam).Doc.Free;
+        TOpenResult(LParam).Free;
+      end;
+    WM_TIMER:
+      if (Viewer <> nil) and (WParam = TIMER_PROGRESS) then
+        Viewer.ShowProgress;
+    WM_DPICHANGED:
+      if Viewer <> nil then
+      begin
+        // the window moved to a screen with another DPI: take the size
+        // Windows suggests, then scale fonts and sizes
+        with PRect(LParam)^ do
+          SetWindowPos(Wnd, 0, Left, Top, Right - Left, Bottom - Top,
+            SWP_NOZORDER or SWP_NOACTIVATE);
+        Viewer.UpdateDpi;
+      end;
     WM_DROPFILES:
       begin
         Files := HDROP(WParam);
@@ -159,6 +217,17 @@ begin
       end;
     WM_ERASEBKGND:
       Result := 1; // Direct3D paints everything
+    WM_TIMER:
+      if WParam = TIMER_REPAINT then
+      begin
+        KillTimer(Wnd, TIMER_REPAINT);
+        Viewer.Invalidate;
+      end;
+    WM_SHOWWINDOW:
+      begin
+        Viewer.FFreshFrames := 0;
+        Result := DefWindowProc(Wnd, Msg, WParam, LParam);
+      end;
     WM_SIZE:
       Viewer.Invalidate; // Paint resizes the target
     WM_LBUTTONDOWN:
@@ -183,23 +252,83 @@ begin
   end;
 end;
 
+{ TOpenThread }
+
+constructor TOpenThread.Create(Window: HWND; R: TOpenResult);
+begin
+  FWindow := Window;
+  FResult := R;
+  FreeOnTerminate := True;
+  inherited Create(False);
+end;
+
+procedure TOpenThread.Execute;
+begin
+  try
+    FResult.Doc := TViewerDocument.Create(FResult.FileName);
+  except
+    on E: Exception do
+      FResult.Error := E.Message;
+  end;
+  // the window frees the result; if it is gone, nobody wants it
+  if not PostMessage(FWindow, WM_OPENED, 0, Winapi.Windows.LPARAM(FResult)) then
+  begin
+    FResult.Doc.Free;
+    FResult.Free;
+  end;
+end;
+
 { TViewer }
 
 constructor TViewer.Create(ForceWarp: Boolean);
 begin
   inherited Create;
   FForceWarp := ForceWarp;
+  FScale := 1;
   FCamera.Init;
   CreateWindows;
   CreateGraphics;
+  UpdateDpi;
+  // the window was created at its 96-DPI size
+  SetWindowPos(FMain, 0, 0, 0, Round(1280 * FScale), Round(860 * FScale),
+    SWP_NOMOVE or SWP_NOZORDER or SWP_NOACTIVATE);
   UpdateMenu;
 end;
 
 destructor TViewer.Destroy;
 begin
+  // a conversion still running cannot be stopped inside the DLL: its
+  // result is dropped (or the process ends before it arrives)
+  CancelOpen;
   FreeGraphics;
   FDoc.Free;
+  if FFont <> 0 then
+    DeleteObject(FFont);
   inherited;
+end;
+
+procedure TViewer.UpdateDpi;
+var
+  Dpi: UINT;
+begin
+  try
+    Dpi := GetDpiForWindow(FMain); // Windows 10 1607 and later
+  except
+    Dpi := 0;
+  end;
+  if Dpi = 0 then
+    Dpi := 96;
+  FScale := Dpi / 96;
+  if FRenderer <> nil then
+    FRenderer.PixelScale := FScale;
+  if FFont <> 0 then
+    DeleteObject(FFont);
+  FFont := CreateFont(-MulDiv(9, Dpi, 72), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+    OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, 'Segoe UI');
+  SendMessage(FTree, WM_SETFONT, FFont, 1);
+  SendMessage(FStatus, WM_SETFONT, FFont, 1);
+  Layout;
+  Invalidate;
 end;
 
 procedure TViewer.CreateWindows;
@@ -242,6 +371,8 @@ begin
   for Mode := Low(Mode) to High(Mode) do
     AppendMenu(Sub, MF_STRING, IDM_MODE + Ord(Mode),
       PChar(Format('%s'#9'%d', [RenderModeNames[Mode], Ord(Mode) + 1])));
+  AppendMenu(Sub, MF_SEPARATOR, 0, nil);
+  AppendMenu(Sub, MF_STRING, IDM_OUTLINES, '&Silhouettes'#9'S');
   AppendMenu(FMenu, MF_POPUP, Sub, '&Mode');
   Sub := CreatePopupMenu;
   for Preset := Low(Preset) to High(Preset) do
@@ -269,7 +400,6 @@ begin
     TreeWidth, 0, 100, 100, FMain, 0, HInstance, nil);
   FStatus := CreateWindowEx(0, STATUSCLASSNAME, nil, WS_CHILD or WS_VISIBLE or SBARS_SIZEGRIP,
     0, 0, 0, 0, FMain, 0, HInstance, nil);
-  SendMessage(FTree, WM_SETFONT, GetStockObject(DEFAULT_GUI_FONT), 0);
 end;
 
 procedure TViewer.CreateGraphics;
@@ -280,6 +410,7 @@ begin
   FDev := TD3DDevice.Create(FForceWarp);
   FTarget := TRenderTarget.Create(FDev, FView, R.Width, R.Height);
   FRenderer := TDwgRenderer.Create(FDev);
+  FRenderer.PixelScale := FScale;
   if FDoc <> nil then
     FRenderer.Upload(FDoc.Data^, FDoc.Origin);
   SetStatus(0, FDev.Description);
@@ -295,7 +426,7 @@ end;
 procedure TViewer.Layout;
 var
   R, SR: TRect;
-  H: Integer;
+  H, W: Integer;
   Parts: array[0..2] of Integer;
 begin
   GetClientRect(FMain, R);
@@ -308,8 +439,9 @@ begin
   GetWindowRect(FStatus, SR);
   H := SR.Height;
   GetClientRect(FMain, R);
-  MoveWindow(FTree, 0, 0, TreeWidth, R.Height - H, True);
-  MoveWindow(FView, TreeWidth, 0, Max(R.Width - TreeWidth, 1), Max(R.Height - H, 1), True);
+  W := Round(TreeWidth * FScale);
+  MoveWindow(FTree, 0, 0, W, R.Height - H, True);
+  MoveWindow(FView, W, 0, Max(R.Width - W, 1), Max(R.Height - H, 1), True);
 end;
 
 procedure TViewer.Invalidate;
@@ -351,28 +483,58 @@ end;
 
 procedure TViewer.Open(const FileName: string);
 var
-  Doc: TViewerDocument;
-  OldCursor: HCURSOR;
+  R: TOpenResult;
 begin
-  OldCursor := SetCursor(LoadCursor(0, IDC_WAIT));
+  Inc(FGeneration);
+  R := TOpenResult.Create;
+  R.FileName := FileName;
+  R.Generation := FGeneration;
+  FOpening := FileName;
+  FOpenStart := GetTickCount;
+  TOpenThread.Create(FMain, R);
+  ShowProgress;
+  SetTimer(FMain, TIMER_PROGRESS, 250, nil);
+end;
+
+procedure TViewer.ShowProgress;
+begin
+  if FOpening <> '' then
+    SetStatus(2, Format('Converting %s ... %d s (Esc: cancel)',
+      [ExtractFileName(FOpening), (GetTickCount - FOpenStart) div 1000]));
+end;
+
+procedure TViewer.CancelOpen;
+begin
+  if FOpening = '' then
+    Exit;
+  Inc(FGeneration); // the running conversion's result will be dropped
+  FOpening := '';
+  KillTimer(FMain, TIMER_PROGRESS);
+  SetStatus(2, 'Cancelled');
+end;
+
+procedure TViewer.Opened(R: TOpenResult);
+begin
   try
-    // conversion runs on the calling thread here; a production viewer
-    // would open on a worker thread (the DLL allows it) and upload after
-    try
-      Doc := TViewerDocument.Create(FileName);
-    except
-      on E: Exception do
-      begin
-        MessageBox(FMain, PChar(E.Message), 'DwgViewer', MB_ICONERROR);
-        Exit;
-      end;
+    if R.Generation <> FGeneration then
+      Exit; // cancelled, or another drawing was opened since
+    FOpening := '';
+    KillTimer(FMain, TIMER_PROGRESS);
+    SetStatus(2, '');
+    if R.Doc = nil then
+    begin
+      MessageBox(FMain, PChar(R.Error), 'DwgViewer', MB_ICONERROR);
+      Exit;
     end;
+    // the GPU upload belongs to the thread that owns the device context
     FRenderer.Clear;
     FDoc.Free;
-    FDoc := Doc;
+    FDoc := R.Doc;
+    R.Doc := nil;
     FRenderer.Upload(FDoc.Data^, FDoc.Origin);
   finally
-    SetCursor(OldCursor);
+    R.Doc.Free;
+    R.Free;
   end;
   FPoints := nil;
   FHover.Kind := skNone;
@@ -381,11 +543,11 @@ begin
   FCamera.SetView(svIso);
   Fit;
   FillTree;
-  SetWindowText(FMain, PChar('DwgViewer - ' + ExtractFileName(FileName)));
+  SetWindowText(FMain, PChar('DwgViewer - ' + ExtractFileName(FDoc.FileName)));
   SetStatus(1, Format('%d instances, %d triangles drawn, %.1f MB on the GPU, %.2f s',
     [FDoc.Data.instance_count, FDoc.Data.triangles_drawn, FRenderer.UploadBytes / 1048576,
      FDoc.LoadSeconds]));
-  SetStatus(2, '');
+  FFreshFrames := 0;
   Invalidate;
 end;
 
@@ -439,6 +601,9 @@ begin
         UpdateOverlay;
       end;
     IDM_CLEAR:
+      if FOpening <> '' then
+        CancelOpen
+      else
       begin
         FPoints := nil;
         FHover.Kind := skNone;
@@ -448,6 +613,8 @@ begin
         FRenderer.SetHighlight(nil);
         UpdateOverlay;
       end;
+    IDM_OUTLINES:
+      FRenderer.Outlines := not FRenderer.Outlines;
   end;
   UpdateMenu;
   Invalidate;
@@ -468,6 +635,7 @@ begin
     CheckMenuItem(FMenu, IDM_PRESET + Ord(Preset), Checked[FRenderer.Preset = Preset]);
   CheckMenuItem(FMenu, IDM_ORTHO, Checked[FCamera.Ortho]);
   CheckMenuItem(FMenu, IDM_MEASURE, Checked[FMeasuring]);
+  CheckMenuItem(FMenu, IDM_OUTLINES, Checked[FRenderer.Outlines]);
 end;
 
 procedure TViewer.UpdateOverlay;
@@ -525,6 +693,13 @@ begin
     FTarget.Resize(FCamera.Width, FCamera.Height);
     FRenderer.Render(FTarget, FCamera);
     Lost := not FTarget.Present;
+    // a frame presented while the window is still being shown can get
+    // lost (seen under Wine): present a couple more shortly after
+    if not Lost and (FFreshFrames < 2) then
+    begin
+      Inc(FFreshFrames);
+      SetTimer(FView, TIMER_REPAINT, 100, nil);
+    end;
   except
     on E: EGraphics do
     begin
@@ -679,7 +854,7 @@ begin
   end
   else if FMeasuring and (FDoc <> nil) then
   begin
-    Snap := FDoc.Picker.Snap(FCamera, X, Y, SnapRadius);
+    Snap := FDoc.Picker.Snap(FCamera, X, Y, SnapRadius * FScale);
     if (Snap.Kind <> FHover.Kind) or ((Snap.Point - FHover.Point).Length > 0) then
     begin
       FHover := Snap;
@@ -713,7 +888,7 @@ var
 begin
   if FMeasuring then
   begin
-    Snap := FDoc.Picker.Snap(FCamera, X, Y, SnapRadius);
+    Snap := FDoc.Picker.Snap(FCamera, X, Y, SnapRadius * FScale);
     if Snap.Kind = skNone then
       Exit;
     if Length(FPoints) = 2 then
@@ -755,7 +930,7 @@ procedure RunViewer(const FileName: string; ForceWarp: Boolean);
 var
   Msg: TMsg;
   Accel: HACCEL;
-  Keys: array[0..10] of TAccel;
+  Keys: array[0..11] of TAccel;
   I: Integer;
 
   procedure Key(I: Integer; Virt: Byte; Code: Word; Cmd: Word);
@@ -773,6 +948,7 @@ begin
   Key(8, 0, Ord('O'), IDM_ORTHO);
   Key(9, 0, Ord('M'), IDM_MEASURE);
   Key(10, 0, VK_ESCAPE, IDM_CLEAR);
+  Key(11, 0, Ord('S'), IDM_OUTLINES);
   Accel := CreateAcceleratorTable(Keys[0], Length(Keys));
   try
     Viewer := TViewer.Create(ForceWarp);

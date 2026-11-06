@@ -26,6 +26,9 @@ program DwgViewer;
 
 {$APPTYPE GUI}
 
+// DwgViewer.manifest: themed controls, per-monitor DPI awareness (make_res.py)
+{$R DwgViewer.res}
+
 uses
   Winapi.Windows,
   Winapi.ActiveX,
