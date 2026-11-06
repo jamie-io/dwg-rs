@@ -408,8 +408,8 @@ projection, snapping, without a GPU) with `DCC64`, runs the test under
 Wine and renders BricsCAD test drawings in every mode into
 `target/delphi-viewer/`. Wine's Direct3D 11 runs on OpenGL or Vulkan and
 needs a display; it has no WARP (`--warp` uses the GPU there). Under Wine
-a frame presented while the window is being shown can stay invisible, so
-the view presents two more shortly after. Compiled with Delphi 13 (dcc64).
+a presented frame showed only with the next one, so the view draws a
+settle frame 100 ms after the last change. Compiled with Delphi 13 (dcc64).
 
 Not done: normal maps; cancelling a conversion inside the DLL (Esc only
 drops its result, the thread runs to the end); silhouettes of transparent

@@ -92,7 +92,7 @@ type
     FFilled: TArray<Boolean>; // tree item's children inserted
     FScale: Double;           // DPI / 96
     FFont: HFONT;
-    FFreshFrames: Integer;    // frames presented since the window was shown
+    FSettling: Boolean;       // this paint is the settle frame (see Paint)
     FGeneration: Integer;     // of the latest Open; older results are dropped
     FOpening: string;         // the drawing being converted, '' for none
     FOpenStart: Cardinal;
@@ -221,12 +221,8 @@ begin
       if WParam = TIMER_REPAINT then
       begin
         KillTimer(Wnd, TIMER_REPAINT);
+        Viewer.FSettling := True;
         Viewer.Invalidate;
-      end;
-    WM_SHOWWINDOW:
-      begin
-        Viewer.FFreshFrames := 0;
-        Result := DefWindowProc(Wnd, Msg, WParam, LParam);
       end;
     WM_SIZE:
       Viewer.Invalidate; // Paint resizes the target
@@ -547,7 +543,6 @@ begin
   SetStatus(1, Format('%d instances, %d triangles drawn, %.1f MB on the GPU, %.2f s',
     [FDoc.Data.instance_count, FDoc.Data.triangles_drawn, FRenderer.UploadBytes / 1048576,
      FDoc.LoadSeconds]));
-  FFreshFrames := 0;
   Invalidate;
 end;
 
@@ -693,13 +688,14 @@ begin
     FTarget.Resize(FCamera.Width, FCamera.Height);
     FRenderer.Render(FTarget, FCamera);
     Lost := not FTarget.Present;
-    // a frame presented while the window is still being shown can get
-    // lost (seen under Wine): present a couple more shortly after
-    if not Lost and (FFreshFrames < 2) then
-    begin
-      Inc(FFreshFrames);
+    // settle frame: draw once more 100 ms after the last change. Some
+    // presentation paths show a frame only with the next one (seen under
+    // Wine, also for the first frame of a new window); this costs one
+    // frame per interaction elsewhere
+    if FSettling then
+      FSettling := False
+    else if not Lost then
       SetTimer(FView, TIMER_REPAINT, 100, nil);
-    end;
   except
     on E: EGraphics do
     begin
