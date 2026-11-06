@@ -314,6 +314,85 @@ application loads it by name, without an import library. Building on
 Windows with the `x86_64-pc-windows-msvc` target should work the same way
 (the `cc` crate drives MSVC for LibreDWG) but has not been tried.
 
+## Delphi viewer example
+
+![Measuring with snapping, hidden line and x-ray](examples/delphi/viewer/screenshot.png)
+
+[`examples/delphi/viewer`](examples/delphi/viewer) is a Direct3D 11 viewer
+for DWG files in Delphi (Win64) on top of `dwg2gltf.dll`, meant as a
+starting point for a viewer inside a larger application. It needs nothing
+but the DLL and Windows' own `d3d11`, `dxgi`, `d3dcompiler_47`,
+`windowscodecs` and `comctl32`: no engine, no third-party units.
+
+- **Device**: hardware, else WARP (Windows' software rasterizer, which is
+  what a remote desktop session without a GPU gets); 4x MSAA when
+  available; a lost device (driver update, session moved) is recreated.
+- **Upload once, draw instanced**: per mesh a vertex buffer, an index
+  buffer and an edge index buffer; textures decoded with WIC into sRGB
+  textures with mipmaps; one instance buffer with every instance's matrix.
+  Each submesh is one `DrawIndexedInstanced` for all instances of its mesh.
+  The world matrices are taken in double from `DwgNode.world` and moved
+  next to the scene's center before going to float.
+- **Shading**: Blinn-Phong with a headlight and a sky/ground ambient, base
+  color times texture, transparent materials sorted back to front,
+  double-sided faces lit on the side that is seen (`SV_IsFrontFace`, which
+  also covers mirrored block instances). The HLSL is a string in the unit,
+  compiled at start with `D3DCompile`.
+- **Modes** (keys 1 to 6): shaded, shaded with edges, hidden line (white
+  faces, black edges), wireframe (edges only), triangles, x-ray. The edges
+  are the DLL's visible edges, drawn as lines over faces pushed back by the
+  rasterizer's depth bias.
+- **Camera**: orbit (left drag), pan (right or middle drag, or shift and
+  left drag), zoom to the cursor (wheel), fit (F), front/back/left/right/
+  top/bottom/isometric views, perspective or orthographic (O).
+- **Measuring** (M): click two points; the CPU picker (ray against each
+  instance's box, then a bounding volume hierarchy per mesh) snaps to end
+  points, midpoints and points of the visible edges and of line geometry
+  within 12 pixels, skips points hidden by other geometry, and falls back
+  to the surface. The status bar shows the snap and the distance with its
+  components along the drawing's axes, in millimeters.
+- **Material presets**: as in the drawing, white clay, grey metal, glass.
+- **Block tree**: the scene's nodes (block name, handle) in a tree view
+  that fills on expansion; selecting a node highlights its instances, and
+  clicking an object in the view selects its block instance in the tree.
+
+The units are layered so the rendering part can be copied as it is:
+`Dwg2Gltf.Math` (vectors, matrices, ray tests), `Dwg2Gltf.Camera`,
+`Dwg2Gltf.D3D11` (device, render target, WIC), `Dwg2Gltf.Renderer` and
+`Dwg2Gltf.Picking` only need a window handle; `ViewerDocument` holds an
+open drawing and `ViewerWindow` is the window around them, in plain Win32
+so the example compiles with the RTL alone. In a VCL application the 3D
+view is any windowed control: create the `TRenderTarget` with
+`Panel.Handle`, render and present from its `WM_PAINT`, call `Resize` when
+it changes size, and send its mouse events to the camera and picker as
+`ViewerWindow` does.
+
+```sh
+cd examples/delphi/viewer && dcc64 DwgViewer.dpr  # put dwg2gltf.dll next to DwgViewer.exe
+DwgViewer chair.dwg                                # the window
+DwgViewer chair.dwg --screenshot out.png           # out-shaded.png, out-edges.png, ... and exit
+          [--size 960x720] [--view iso] [--material clay] [--ortho] [--warp]
+          [--select NODE] [--measure X1,Y1,X2,Y2]
+```
+
+`--screenshot` renders every mode offscreen into PNG files without opening
+a window and prints the device, the scene, the draw calls and the frame
+time; `--warp` forces software rendering; `--measure` snaps at two pixels
+and draws the measurement into `out-measure.png`.
+
+`scripts/build-delphi-viewer.sh` cross-builds the DLL, compiles the viewer
+and `PickingTest.dpr` (picking against brute force, camera rays and
+projection, snapping, without a GPU) with `DCC64`, runs the test under
+Wine and renders BricsCAD test drawings in every mode into
+`target/delphi-viewer/`. Wine's Direct3D 11 runs on OpenGL or Vulkan and
+needs a display; it has no WARP (`--warp` uses the GPU there). Compiled
+with Delphi 13 (dcc64).
+
+Not done: silhouette lines (the DLL's edges leave smooth curved surfaces
+without lines, so hidden line shows only their rims), normal maps,
+order-independent transparency in x-ray, conversion on a worker thread,
+per-monitor DPI.
+
 ## What gets converted
 
 | DWG | glTF |

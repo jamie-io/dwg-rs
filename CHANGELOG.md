@@ -2,6 +2,7 @@
 
 ## 2026-11-06
 
+- Delphi example: a Direct3D 11 viewer on dwg2gltf.dll (`examples/delphi/viewer`) with shaded, edge, hidden-line, wireframe and x-ray modes, instanced drawing, measuring with snapping, material presets and a block tree, built and tested by `scripts/build-delphi-viewer.sh`
 - scripts/build-dll.sh builds dwg2gltf.dll for Windows without the build machine's paths in it
 - QA runs compare only drawings whose GLB changed, start with the slowest drawings and use all cores when memory allows
 - C interface: dwg2gltf.dll / libdwg2gltf.so (`crates/dwg2gltf-capi`, `include/dwg2gltf.h`) with the scene as arrays for native viewers (meshes, instance tree, materials, textures, warnings, bounds) and the GLB
