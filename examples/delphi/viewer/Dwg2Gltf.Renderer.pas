@@ -56,7 +56,7 @@ uses
 type
   TRenderMode = (rmShaded, rmShadedEdges, rmHiddenLine, rmWireframe, rmTriangles, rmXRay);
   TMaterialPreset = (mpDrawing, mpWhiteClay, mpGreyMetal, mpGlass);
-  TMarkerKind = (mkNone, mkSurface, mkVertex, mkMidpoint, mkEdge);
+  TMarkerKind = (mkNone, mkSurface, mkVertex, mkMidpoint, mkEdge, mkCenter); // as TSnapKind
   TColor4 = TFourSingleArray; // linear RGBA
 
   TGpuMesh = record
@@ -1141,7 +1141,7 @@ var
   Colors: TArray<TColor4>;
   Mapped: D3D11_MAPPED_SUBRESOURCE;
   F, R, U: TVec3;
-  I, N: Integer;
+  I, J, N: Integer;
   S: Double;
   Stride, Offset: UINT;
   BlendFactor: TFourSingleArray;
@@ -1198,6 +1198,10 @@ begin
             Add(P + (-R + U) * S, P + (R + U) * S, Color);
             Add(P + (-R - U) * S, P + (R - U) * S, Color);
           end;
+        mkCenter: // octagon
+          for J := 0 to 7 do
+            Add(P + (R * Cos(J * Pi / 4) + U * Sin(J * Pi / 4)) * S,
+              P + (R * Cos((J + 1) * Pi / 4) + U * Sin((J + 1) * Pi / 4)) * S, Color);
         mkSurface: // cross
           begin
             Add(P - R * S, P + R * S, Color);

@@ -11,9 +11,15 @@
 
   Snap: around the cursor (a radius in pixels) the visible edges of
   dwg2gltf.dll and the drawing's line geometry are searched for an end
-  point, then a midpoint, then the nearest point on an edge; a candidate
-  hidden behind other geometry is skipped. Without one, the surface point
-  under the cursor is taken.
+  point, then a midpoint, then a center, then the nearest point on an edge;
+  a candidate hidden behind other geometry is skipped. Without one, the
+  surface point under the cursor is taken.
+
+  Edges are joined into chains at vertices where exactly two of them meet
+  without turning by more than 45 degrees, so a tessellated arc is one
+  chain: its end points are the arc's, its midpoint is halfway along the
+  arc, and a closed round chain (a circle, a hole's rim) has a center
+  instead.
 
   The picker reads the scene's arrays directly: keep the DwgScene open
   while the picker lives. Coordinates are relative to Origin, as in
@@ -28,7 +34,7 @@ uses
   System.SysUtils, Dwg2Gltf, Dwg2Gltf.Math, Dwg2Gltf.Camera;
 
 type
-  TSnapKind = (skNone, skSurface, skVertex, skMidpoint, skEdge);
+  TSnapKind = (skNone, skSurface, skVertex, skMidpoint, skEdge, skCenter);
 
   THit = record
     Instance: Integer;
@@ -55,6 +61,16 @@ type
     Tris: TArray<UInt32>; // first index of each triangle, in leaf order
   end;
 
+  { Snap features of a mesh, in its own coordinates. }
+  TMeshFeatures = record
+    Built: Boolean;
+    Segments: TArray<UInt32>;          // vertex index pairs: edges and lines
+    Chains: TArray<TArray<UInt32>>;    // vertex indices; closed: last = first
+    EndPoints: TArray<UInt32>;         // ends of the open chains
+    Midpoints: TArray<TVec3>;          // halfway along each open chain
+    Centers: TArray<TVec3>;            // of the closed round chains
+  end;
+
   TPickInstance = record
     Mesh: Integer;
     World, Inverse: TMat4;
@@ -66,8 +82,10 @@ type
     FData: PDwgSceneData;
     FInstances: TArray<TPickInstance>;
     FBvh: TArray<TMeshBvh>;
+    FFeatures: TArray<TMeshFeatures>;
     FSceneBox: TBox;
     procedure BuildBvh(MeshIndex: Integer);
+    procedure BuildFeatures(MeshIndex: Integer);
     function Vertex(const Mesh: TDwgMesh; Index: UInt32): TVec3; inline;
     function PickMesh(MeshIndex: Integer; const Local: TRay; var Best: Double;
       out Tri: Integer): Boolean;
@@ -78,13 +96,17 @@ type
     function Pick(const Ray: TRay; out Hit: THit): Boolean;
     { The snap point for the cursor at (X, Y) within Radius pixels. }
     function Snap(const Camera: TOrbitCamera; X, Y, Radius: Double): TSnap;
+    { The snap features of a mesh (built on first use). }
+    function Features(MeshIndex: Integer): TMeshFeatures;
     property SceneBox: TBox read FSceneBox;
     property Instances: TArray<TPickInstance> read FInstances;
   end;
 
 const
   SnapKindNames: array[TSnapKind] of string =
-    ('none', 'surface', 'end point', 'midpoint', 'edge');
+    ('none', 'surface', 'end point', 'midpoint', 'edge', 'center');
+  { Which snap wins when several are within the radius (lower first). }
+  SnapPriority: array[TSnapKind] of Integer = (9, 8, 0, 1, 3, 2);
 
 implementation
 
@@ -104,6 +126,7 @@ begin
   inherited Create;
   FData := @Data;
   SetLength(FBvh, Data.mesh_count);
+  SetLength(FFeatures, Data.mesh_count);
   SetLength(FInstances, Data.instance_count);
   FSceneBox.Clear;
   for I := 0 to High(FInstances) do
@@ -249,6 +272,184 @@ begin
     Bvh.Tris[I] := Firsts[Order[I]];
 end;
 
+function TDwgPicker.Features(MeshIndex: Integer): TMeshFeatures;
+begin
+  if not FFeatures[MeshIndex].Built then
+    BuildFeatures(MeshIndex);
+  Result := FFeatures[MeshIndex];
+end;
+
+procedure TDwgPicker.BuildFeatures(MeshIndex: Integer);
+const
+  MaxTurn = 0.7071; // cos 45 degrees
+var
+  Mesh: PDwgMesh;
+  F: ^TMeshFeatures;
+  Segs: TArray<UInt32>;
+  N, I, J, K, V, Seg, Count: Integer;
+  Degree, FirstSeg, NextSeg: TArray<Integer>; // per vertex: segments touching it
+  Used, IsBreak: TArray<Boolean>;
+  Chain: TArray<UInt32>;
+  Len, Half, L: Double;
+  A, B, C: TVec3;
+
+  function Other(Seg, V: Integer): Integer;
+  begin
+    if Integer(Segs[2 * Seg]) = V then
+      Result := Segs[2 * Seg + 1]
+    else
+      Result := Segs[2 * Seg];
+  end;
+
+  // the unused segment at V, or -1
+  function Unused(V: Integer): Integer;
+  var
+    E: Integer;
+  begin
+    E := FirstSeg[V];
+    while E >= 0 do
+    begin
+      if not Used[E shr 1] then
+        Exit(E shr 1);
+      E := NextSeg[E];
+    end;
+    Result := -1;
+  end;
+
+  // follow segments from V (through vertices that are no break) into Chain
+  procedure Walk(V, Seg: Integer);
+  begin
+    Chain := [UInt32(V)];
+    repeat
+      Used[Seg] := True;
+      V := Other(Seg, V);
+      Chain := Chain + [UInt32(V)];
+      if IsBreak[V] then
+        Break;
+      Seg := Unused(V);
+    until Seg < 0;
+  end;
+
+begin
+  F := @FFeatures[MeshIndex];
+  F.Built := True;
+  Mesh := @FData.meshes[MeshIndex];
+  // the segments: visible edges, then line geometry
+  Count := Mesh.edge_count;
+  for J := 0 to Integer(Mesh.submesh_count) - 1 do
+    if Mesh.submeshes[J].topology = DWG_LINES then
+      Inc(Count, Mesh.submeshes[J].index_count div 2);
+  SetLength(Segs, 2 * Count);
+  if Mesh.edge_count > 0 then
+    Move(Mesh.edges^, Segs[0], Mesh.edge_count * 2 * SizeOf(UInt32));
+  K := 2 * Integer(Mesh.edge_count);
+  for J := 0 to Integer(Mesh.submesh_count) - 1 do
+    if Mesh.submeshes[J].topology = DWG_LINES then
+      for I := 0 to Integer(Mesh.submeshes[J].index_count div 2) * 2 - 1 do
+      begin
+        Segs[K] := Mesh.indices[Mesh.submeshes[J].first_index + UInt32(I)];
+        Inc(K);
+      end;
+  F.Segments := Segs;
+  if Count = 0 then
+    Exit;
+
+  // segments per vertex, as linked lists (entry 2 * segment + end)
+  N := Mesh.vertex_count;
+  SetLength(Degree, N);
+  SetLength(FirstSeg, N);
+  SetLength(NextSeg, 2 * Count);
+  for V := 0 to N - 1 do
+    FirstSeg[V] := -1;
+  for I := 0 to 2 * Count - 1 do
+  begin
+    V := Segs[I];
+    Inc(Degree[V]);
+    NextSeg[I] := FirstSeg[V];
+    FirstSeg[V] := I;
+  end;
+  // chains break where other than two segments meet, or where they turn
+  SetLength(IsBreak, N);
+  for V := 0 to N - 1 do
+    if Degree[V] = 2 then
+    begin
+      I := FirstSeg[V] shr 1;
+      J := NextSeg[FirstSeg[V]] shr 1;
+      A := Vertex(Mesh^, Other(I, V));
+      B := Vertex(Mesh^, V);
+      C := Vertex(Mesh^, Other(J, V));
+      IsBreak[V] := (B - A).Normalized.Dot((C - B).Normalized) < MaxTurn;
+    end
+    else
+      IsBreak[V] := Degree[V] > 0;
+
+  SetLength(Used, Count);
+  // open chains start at a break
+  for V := 0 to N - 1 do
+    if IsBreak[V] then
+    begin
+      F.EndPoints := F.EndPoints + [UInt32(V)];
+      Seg := Unused(V);
+      while Seg >= 0 do
+      begin
+        Walk(V, Seg);
+        F.Chains := F.Chains + [Chain];
+        Seg := Unused(V);
+      end;
+    end;
+  // what is left are closed loops without a break
+  for Seg := 0 to Count - 1 do
+    if not Used[Seg] then
+    begin
+      Walk(Segs[2 * Seg], Seg);
+      F.Chains := F.Chains + [Chain];
+    end;
+
+  for Chain in F.Chains do
+  begin
+    if Chain[0] = Chain[High(Chain)] then
+    begin
+      // closed: a center when round (all corners about as far from it)
+      if Length(Chain) < 7 then
+        Continue;
+      C := TVec3.Create(0, 0, 0);
+      for I := 0 to High(Chain) - 1 do
+        C := C + Vertex(Mesh^, Chain[I]);
+      C := C * (1 / High(Chain));
+      Len := 0;
+      L := MaxDouble;
+      for I := 0 to High(Chain) - 1 do
+      begin
+        Len := Max(Len, (Vertex(Mesh^, Chain[I]) - C).Length);
+        L := Min(L, (Vertex(Mesh^, Chain[I]) - C).Length);
+      end;
+      if L > 0.9 * Len then
+        F.Centers := F.Centers + [C];
+      Continue;
+    end;
+    // open: the point halfway along it
+    Len := 0;
+    for I := 1 to High(Chain) do
+      Len := Len + (Vertex(Mesh^, Chain[I]) - Vertex(Mesh^, Chain[I - 1])).Length;
+    Half := Len / 2;
+    for I := 1 to High(Chain) do
+    begin
+      A := Vertex(Mesh^, Chain[I - 1]);
+      B := Vertex(Mesh^, Chain[I]);
+      L := (B - A).Length;
+      if (L >= Half) or (I = High(Chain)) then
+      begin
+        if L > 0 then
+          F.Midpoints := F.Midpoints + [A + (B - A) * Min(Half / L, 1)]
+        else
+          F.Midpoints := F.Midpoints + [A];
+        Break;
+      end;
+      Half := Half - L;
+    end;
+  end;
+end;
+
 function TDwgPicker.PickMesh(MeshIndex: Integer; const Local: TRay; var Best: Double;
   out Tri: Integer): Boolean;
 var
@@ -370,7 +571,7 @@ var
   Candidates: TList<TCandidate>;
   I, J, K, Tested: Integer;
   Mesh: PDwgMesh;
-  Sub: PDwgSubmesh;
+  W: TMat4;
   C: TCandidate;
   SX, SY, X0, Y0, X1, Y1: Double;
   Behind: Boolean;
@@ -411,9 +612,6 @@ var
   var
     T, S: Double;
   begin
-    Consider(skVertex, A, Inst);
-    Consider(skVertex, B, Inst);
-    Consider(skMidpoint, (A + B) * 0.5, Inst);
     RaySegment(Ray, A, B, T, S);
     if T > 0 then
       Consider(skEdge, A + (B - A) * S, Inst);
@@ -450,32 +648,28 @@ begin
         (Y > Y1 + Radius)) then
         Continue;
       Mesh := @FData.meshes[FInstances[I].Mesh];
-      // visible edges
-      for J := 0 to Integer(Mesh.edge_count) - 1 do
-        Segment(I, FInstances[I].World.TransformPoint(Vertex(Mesh^, Mesh.edges[2 * J])),
-          FInstances[I].World.TransformPoint(Vertex(Mesh^, Mesh.edges[2 * J + 1])));
-      // line geometry
-      for J := 0 to Integer(Mesh.submesh_count) - 1 do
+      if not FFeatures[FInstances[I].Mesh].Built then
+        BuildFeatures(FInstances[I].Mesh);
+      with FFeatures[FInstances[I].Mesh] do
       begin
-        Sub := @Mesh.submeshes[J];
-        if Sub.topology <> DWG_LINES then
-          Continue;
-        K := 0;
-        while K + 1 < Integer(Sub.index_count) do
-        begin
-          Segment(I,
-            FInstances[I].World.TransformPoint(Vertex(Mesh^, Mesh.indices[Sub.first_index + UInt32(K)])),
-            FInstances[I].World.TransformPoint(Vertex(Mesh^, Mesh.indices[Sub.first_index + UInt32(K) + 1])));
-          Inc(K, 2);
-        end;
+        W := FInstances[I].World;
+        for J := 0 to High(EndPoints) do
+          Consider(skVertex, W.TransformPoint(Vertex(Mesh^, EndPoints[J])), I);
+        for J := 0 to High(Midpoints) do
+          Consider(skMidpoint, W.TransformPoint(Midpoints[J]), I);
+        for J := 0 to High(Centers) do
+          Consider(skCenter, W.TransformPoint(Centers[J]), I);
+        for J := 0 to Length(Segments) div 2 - 1 do
+          Segment(I, W.TransformPoint(Vertex(Mesh^, Segments[2 * J])),
+            W.TransformPoint(Vertex(Mesh^, Segments[2 * J + 1])));
       end;
     end;
 
-    // end points before midpoints before edges, each the nearest first
+    // end points, midpoints, centers, edges; each the nearest first
     Candidates.Sort(TComparer<TCandidate>.Construct(
       function(const A, B: TCandidate): Integer
       begin
-        Result := Ord(A.Kind) - Ord(B.Kind);
+        Result := SnapPriority[A.Kind] - SnapPriority[B.Kind];
         if Result = 0 then
           Result := CompareValue(A.Pixels, B.Pixels);
       end));

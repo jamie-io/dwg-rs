@@ -92,6 +92,13 @@ var
   Fmt: TFormatSettings;
   View: TStandardView;
   Found: Boolean;
+  Features: TMeshFeatures;
+  Chain: TArray<UInt32>;
+  K, Feats: Integer;
+  Len, Along: Double;
+  A, B: TVec3;
+  Points: TArray<TVec3>;
+  Kind: TSnapKind;
 begin
   Fmt := TFormatSettings.Invariant;
   WriteLn(ExtractFileName(FileName));
@@ -144,6 +151,44 @@ begin
     Expect(Agree = 500, 'BVH and brute force disagree');
     Expect(Hits > 0, 'no ray hit the scene');
 
+    // chains: each open chain's midpoint lies on it, halfway along it;
+    // each closed chain with a center has its corners as far from it
+    Feats := 0;
+    for I := 0 to Integer(Doc.Data.mesh_count) - 1 do
+    begin
+      Features := Doc.Picker.Features(I);
+      Mesh := @Doc.Data.meshes[I];
+      J := 0;
+      for Chain in Features.Chains do
+      begin
+        if Chain[0] = Chain[High(Chain)] then
+          Continue;
+        P := Features.Midpoints[J];
+        Inc(J);
+        Len := 0;
+        Along := -1;
+        for K := 1 to High(Chain) do
+        begin
+          A := Vertex(Mesh^, Chain[K - 1]);
+          B := Vertex(Mesh^, Chain[K]);
+          if (Along < 0) and ((P - A).Length + (B - P).Length - (B - A).Length <
+            1E-9 * (1 + (B - A).Length)) then
+            Along := Len + (P - A).Length;
+          Len := Len + (B - A).Length;
+        end;
+        Expect(Abs(Along - Len / 2) < 1E-6 * Len, 'a chain midpoint is not halfway along it');
+      end;
+      Inc(Feats, Length(Features.Centers));
+      WriteLn(Format('  mesh %d: %d chains, %d end points, %d midpoints, %d centers',
+        [I, Length(Features.Chains), Length(Features.EndPoints), Length(Features.Midpoints),
+         Length(Features.Centers)]));
+    end;
+    if ExtractFileName(FileName).StartsWith('box_') then
+      Expect((Length(Features.Chains) = 12) and (Length(Features.EndPoints) = 8),
+        'a box has 12 edges with 8 corners');
+    if ExtractFileName(FileName).StartsWith('cylinder_') then
+      Expect(Feats = 2, 'a cylinder has two rims with a center each');
+
     // 2. camera: a pixel's ray goes through the point that projects there,
     // and the ray through the screen center of a fitted view hits something
     // (for these solid test drawings)
@@ -178,9 +223,10 @@ begin
     Camera.Width := 800;
     Camera.Height := 600;
 
-    // 3. snapping: a few pixels next to the projected end point of a
-    // visible edge, where nothing hides it, gives an end point at most as
-    // far from the cursor (it, or one that projects as near)
+    // 3. snapping: a few pixels next to a feature (a chain's end point,
+    // else a round chain's center) that nothing hides gives a feature of
+    // that kind at most as far from the cursor (it, or one that projects
+    // as near)
     Camera.Ortho := False;
     Camera.SetView(svIso);
     Camera.Fit(Doc.Box);
@@ -188,9 +234,19 @@ begin
     for I := 0 to High(Doc.Picker.Instances) do
     begin
       Mesh := @Doc.Data.meshes[Doc.Picker.Instances[I].Mesh];
-      for J := 0 to Integer(Mesh.edge_count) * 2 - 1 do
+      Features := Doc.Picker.Features(Doc.Picker.Instances[I].Mesh);
+      Points := nil;
+      for J := 0 to High(Features.EndPoints) do
+        Points := Points + [Vertex(Mesh^, Features.EndPoints[J])];
+      Kind := skVertex;
+      if Points = nil then
       begin
-        Corner := Doc.Picker.Instances[I].World.TransformPoint(Vertex(Mesh^, Mesh.edges[J]));
+        Points := Features.Centers;
+        Kind := skCenter;
+      end;
+      for J := 0 to High(Points) do
+      begin
+        Corner := Doc.Picker.Instances[I].World.TransformPoint(Points[J]);
         if not Camera.Project(Corner, X, Y) or (X < 20) or (Y < 20) or (X > 780) or (Y > 580) then
           Continue;
         Ray.Origin := Camera.Eye;
@@ -201,20 +257,20 @@ begin
         Snap := Doc.Picker.Snap(Camera, X + 3, Y - 2, 12);
         Found := True;
         Camera.Project(Snap.Point, X, Y);
-        WriteLn(Format('  snap: %s (%.4f, %.4f, %.4f) for the end point (%.4f, %.4f, %.4f)',
+        WriteLn(Format('  snap: %s (%.4f, %.4f, %.4f) for the %s (%.4f, %.4f, %.4f)',
           [SnapKindNames[Snap.Kind], Snap.Point.X, Snap.Point.Y, Snap.Point.Z,
-           Corner.X, Corner.Y, Corner.Z], Fmt));
-        Expect(Snap.Kind = skVertex, 'no end point snapped');
+           SnapKindNames[Kind], Corner.X, Corner.Y, Corner.Z], Fmt));
+        Expect(Snap.Kind = Kind, 'snapped to another kind');
         Camera.Project(Corner, T, R);
         Expect(Sqrt(Sqr(X - T - 3) + Sqr(Y - R + 2)) <= Sqrt(13) + 1E-6,
-          'the snapped end point is farther than the expected one');
+          'the snap is farther than the expected one');
         Break;
       end;
       if Found then
         Break;
     end;
     if Doc.Data.edge_count > 0 then
-      Expect(Found, 'no visible end point in view');
+      Expect(Found, 'no visible end point or center in view');
     // the surface under the center of the view
     Snap := Doc.Picker.Snap(Camera, 400, 300, 1);
     WriteLn('  snap at the center: ', SnapKindNames[Snap.Kind]);
