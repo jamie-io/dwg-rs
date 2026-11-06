@@ -19,11 +19,25 @@
   no culling, and the pixel shader turns the normal towards the viewer on
   back faces (SV_IsFrontFace). Single-sided materials are culled.
 
-  Modes: shaded, shaded with edges, hidden line (white faces that only
-  write depth, black edges), wireframe (edges only), triangles (the
-  tessellation as wire) and x-ray (faint faces, all edges). Edges are the
-  DLL's visible edges; the faces under them are pushed back a little with
-  the rasterizer's depth bias, so edges win the depth test.
+  Modes: shaded, shaded with edges, hidden line (white faces, black
+  edges), wireframe (edges only), triangles (the tessellation as wire) and
+  x-ray (faint faces, all edges). Edges are the DLL's visible edges; the
+  faces under them are pushed back a little with the rasterizer's depth
+  bias, so edges win the depth test. Lines are drawn as quads by a geometry
+  shader, so their width can follow the screen's DPI.
+
+  Silhouettes: the DLL's edges are creases and boundaries only, so a smooth
+  curved surface has none along its outline. With Outlines on, shaded with
+  edges and hidden line also write each pixel's normal and 1 / depth into
+  a second target; a full-screen pass then draws a line where 1 / depth
+  bends (it is linear across any plane, so only outlines and steps show)
+  or the normal jumps (parts meeting at an angle).
+
+  X-ray: weighted blended order-independent transparency. The faces add
+  their premultiplied colors into one target and multiply a second one by
+  (1 - alpha); a full-screen pass composes the average color with the
+  total coverage. The result does not depend on the drawing order, so it
+  stays still while the view turns.
 
   Coordinates: the renderer works in the scene's frame minus Origin (given
   to Upload, usually the center of the scene's bounds), computed in double
@@ -89,8 +103,9 @@ type
   TDwgRenderer = class
   private
     FDev: TD3DDevice;
-    FVS: ID3D11VertexShader;
-    FPS: ID3D11PixelShader;
+    FVS, FFullVS: ID3D11VertexShader;
+    FPS, FXRayPS, FOutlinePS, FCompositePS: ID3D11PixelShader;
+    FLineGS: ID3D11GeometryShader;
     FLayout: ID3D11InputLayout;
     FFrameCB, FObjectCB: ID3D11Buffer;
     FOverlayVB: ID3D11Buffer;
@@ -100,7 +115,7 @@ type
     FRasterSolid: array[Boolean, 0..2] of ID3D11RasterizerState;
     FRasterWire: ID3D11RasterizerState;
     FDepthWrite, FDepthTest, FDepthOff: ID3D11DepthStencilState;
-    FBlendAlpha: ID3D11BlendState;
+    FBlendAlpha, FBlendXRay: ID3D11BlendState;
     FMeshes: TArray<TGpuMesh>;
     FMaterials: TArray<TGpuMaterial>;
     FTextures: TArray<ID3D11ShaderResourceView>;
@@ -117,7 +132,9 @@ type
     function UploadTexture(const Tex: TDwgTexture): ID3D11ShaderResourceView;
     procedure SetFrame(const Camera: TOrbitCamera);
     procedure SetObject(const Color: TColor4; Lit, Textured: Boolean; Spec, Shininess,
-      Highlight: Single);
+      Highlight: Single; LineWidth: Single = 1);
+    procedure LineShader(On: Boolean);
+    procedure FullScreenPass(PS: ID3D11PixelShader; const A, B: ID3D11ShaderResourceView);
     procedure UploadInstances;
     procedure BindMesh(Mesh: Integer);
     function EffectiveMaterial(Index: UINT): TGpuMaterial;
@@ -130,6 +147,10 @@ type
     Preset: TMaterialPreset;
     Overlay: TArray<TOverlayLine>;
     Markers: TArray<TOverlayMarker>;
+    { Silhouette lines in shaded with edges and hidden line. }
+    Outlines: Boolean;
+    { Screen pixels per 96-DPI pixel: line widths, outline and marker size. }
+    PixelScale: Single;
     constructor Create(Dev: TD3DDevice);
     destructor Destroy; override;
     { Copy the scene to the GPU (the scene may be freed afterwards). }
@@ -166,19 +187,25 @@ const
   ShaderSource =
     'cbuffer Frame : register(b0) {'#10 +
     '  float4x4 ViewProj;'#10 +
-    '  float4 Eye;      // xyz: camera position (w = 1), or view direction (w = 0, orthographic)'#10 +
-    '  float4 LightDir; // xyz: towards the light'#10 +
-    '  float4 Sky;      // ambient from above'#10 +
-    '  float4 Ground;   // ambient from below'#10 +
+    '  float4 Eye;         // xyz: camera position (w = 1), or towards the camera (w = 0, orthographic)'#10 +
+    '  float4 LightDir;    // xyz: towards the light'#10 +
+    '  float4 Sky;         // ambient from above'#10 +
+    '  float4 Ground;      // ambient from below'#10 +
     '  float4 HighlightColor;'#10 +
+    '  float4 DepthOrigin; // xyz: depth is measured from here along Forward'#10 +
+    '  float4 Forward;     // xyz: view direction'#10 +
+    '  float4 Viewport;    // xy: size in pixels, z: line width in pixels, w: outline step in pixels'#10 +
+    '  float4 Outline;     // rgb: outline color, w: threshold for the bend of 1 / depth'#10 +
     '};'#10 +
     'cbuffer Object : register(b1) {'#10 +
-    '  float4 Color;    // linear RGBA'#10 +
-    '  float4 Shade;    // x: specular, y: shininess, z: lit (1) or flat (0), w: textured'#10 +
-    '  float4 Extra;    // x: how much a highlighted instance takes the highlight color'#10 +
+    '  float4 Color;       // linear RGBA'#10 +
+    '  float4 Shade;       // x: specular, y: shininess, z: lit (1) or flat (0), w: textured'#10 +
+    '  float4 Extra;       // x: how much a highlighted instance takes the highlight color, y: line width factor'#10 +
     '};'#10 +
     'Texture2D BaseColorTex : register(t0);'#10 +
     'SamplerState Smp : register(s0);'#10 +
+    'Texture2D AuxA : register(t1); // outlines: normal and 1 / depth; x-ray: summed colors'#10 +
+    'Texture2D AuxB : register(t2); // x-ray: what still shows through'#10 +
     'struct VSIn {'#10 +
     '  float3 pos : POSITION; float3 nrm : NORMAL; float2 uv : TEXCOORD0;'#10 +
     '  // per instance: the world matrix and the normal matrix by columns'#10 +
@@ -200,21 +227,94 @@ const
     '  o.highlight = i.flags.x * Extra.x;'#10 +
     '  return o;'#10 +
     '}'#10 +
-    'float4 PS(PSIn i, bool front : SV_IsFrontFace) : SV_Target {'#10 +
+    '// a line as a quad of Viewport.z * Extra.y pixels, clipped at the near plane first'#10 +
+    '[maxvertexcount(4)]'#10 +
+    'void GSLine(line PSIn v[2], inout TriangleStream<PSIn> s) {'#10 +
+    '  float4 p0 = v[0].pos, p1 = v[1].pos;'#10 +
+    '  if (p0.z < 0 && p1.z < 0) return;'#10 +
+    '  if (p0.z < 0) p0 = lerp(p0, p1, p0.z / (p0.z - p1.z));'#10 +
+    '  if (p1.z < 0) p1 = lerp(p1, p0, p1.z / (p1.z - p0.z));'#10 +
+    '  float2 a = p0.xy / p0.w * Viewport.xy, b = p1.xy / p1.w * Viewport.xy; // twice the pixels'#10 +
+    '  float2 d = b - a;'#10 +
+    '  d = dot(d, d) > 1e-12 ? normalize(d) : float2(1, 0);'#10 +
+    '  float2 t = d * (Viewport.z * Extra.y / Viewport.xy); // half a width, in clip units'#10 +
+    '  float2 n = float2(-d.y, d.x) * (Viewport.z * Extra.y / Viewport.xy);'#10 +
+    '  PSIn o = v[0];'#10 +
+    '  o.pos = float4(p0.xy + (-t + n) * p0.w, p0.zw); s.Append(o);'#10 +
+    '  o.pos = float4(p0.xy + (-t - n) * p0.w, p0.zw); s.Append(o);'#10 +
+    '  o = v[1];'#10 +
+    '  o.pos = float4(p1.xy + (t + n) * p1.w, p1.zw); s.Append(o);'#10 +
+    '  o.pos = float4(p1.xy + (t - n) * p1.w, p1.zw); s.Append(o);'#10 +
+    '}'#10 +
+    'float4 ShadeColor(PSIn i, float3 n, float3 v) {'#10 +
     '  float4 c = Color;'#10 +
     '  if (Shade.w > 0) c *= BaseColorTex.Sample(Smp, i.uv);'#10 +
     '  c.rgb = lerp(c.rgb, HighlightColor.rgb, i.highlight);'#10 +
     '  if (Shade.z == 0) return c;'#10 +
-    '  float3 v = Eye.w > 0 ? normalize(Eye.xyz - i.wpos) : Eye.xyz;'#10 +
-    '  float len = length(i.nrm);'#10 +
-    '  float3 n = len > 1e-12 ? i.nrm / len : v;'#10 +
-    '  if (!front) n = -n; // double-sided: light the side we see'#10 +
     '  float3 l = LightDir.xyz;'#10 +
     '  float diffuse = saturate(dot(n, l));'#10 +
     '  float3 h = normalize(l + v);'#10 +
     '  float spec = diffuse > 0 ? pow(saturate(dot(n, h)), Shade.y) * Shade.x : 0;'#10 +
     '  float3 ambient = lerp(Ground.rgb, Sky.rgb, n.y * 0.5 + 0.5);'#10 +
     '  return float4(c.rgb * (ambient + 0.68 * diffuse) + spec, c.a);'#10 +
+    '}'#10 +
+    'float3 FacingNormal(PSIn i, bool front, float3 v) {'#10 +
+    '  float len = length(i.nrm);'#10 +
+    '  float3 n = len > 1e-12 ? i.nrm / len : v;'#10 +
+    '  return front ? n : -n; // double-sided: the side we see'#10 +
+    '}'#10 +
+    'float3 ToEye(PSIn i) { return Eye.w > 0 ? normalize(Eye.xyz - i.wpos) : Eye.xyz; }'#10 +
+    'struct PSOut { float4 color : SV_Target0; float4 aux : SV_Target1; };'#10 +
+    'PSOut PS(PSIn i, bool front : SV_IsFrontFace) {'#10 +
+    '  float3 v = ToEye(i);'#10 +
+    '  float3 n = FacingNormal(i, front, v);'#10 +
+    '  PSOut o;'#10 +
+    '  o.color = ShadeColor(i, n, v);'#10 +
+    '  // for the outlines (when a second target is bound): the normal and'#10 +
+    '  // 1 / depth, negative for highlighted instances (0 is the background)'#10 +
+    '  float r = 1 / max(dot(i.wpos - DepthOrigin.xyz, Forward.xyz), 1e-9);'#10 +
+    '  o.aux = float4(n, i.highlight > 0 ? -r : r);'#10 +
+    '  return o;'#10 +
+    '}'#10 +
+    'struct XRayOut { float4 sum : SV_Target0; float4 reveal : SV_Target1; };'#10 +
+    'XRayOut PSXRay(PSIn i, bool front : SV_IsFrontFace) {'#10 +
+    '  float3 v = ToEye(i);'#10 +
+    '  float4 c = ShadeColor(i, FacingNormal(i, front, v), v);'#10 +
+    '  XRayOut o;'#10 +
+    '  o.sum = float4(c.rgb * c.a, c.a); // added up'#10 +
+    '  o.reveal = c.aaaa;                // multiplies the target by 1 - alpha'#10 +
+    '  return o;'#10 +
+    '}'#10 +
+    '// a triangle that covers the screen'#10 +
+    'float4 VSFull(uint id : SV_VertexID) : SV_Position {'#10 +
+    '  float2 uv = float2((id << 1) & 2, id & 2);'#10 +
+    '  return float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);'#10 +
+    '}'#10 +
+    'float4 Aux(int2 p) { return AuxA.Load(int3(clamp(p, int2(0, 0), int2(Viewport.xy) - 1), 0)); }'#10 +
+    'float4 PSOutline(float4 pos : SV_Position) : SV_Target {'#10 +
+    '  int2 p = int2(pos.xy);'#10 +
+    '  int st = max(int(Viewport.w), 1);'#10 +
+    '  float4 c = Aux(p);'#10 +
+    '  float r = abs(c.w);'#10 +
+    '  if (r == 0) discard; // background: the line goes on the object''s side'#10 +
+    '  float4 l = Aux(p - int2(st, 0)), rt = Aux(p + int2(st, 0));'#10 +
+    '  float4 u = Aux(p - int2(0, st)), d = Aux(p + int2(0, st));'#10 +
+    '  // 1 / depth is linear across a plane: its second difference is zero'#10 +
+    '  // there, and negative where this pixel lies in front of its neighbours'#10 +
+    '  float bend = -min(abs(l.w) + abs(rt.w) - 2 * r, abs(u.w) + abs(d.w) - 2 * r) / r;'#10 +
+    '  float e = saturate((bend - Outline.w) / Outline.w);'#10 +
+    '  // the normal jumps: parts meeting at an angle (right and down only: one pixel wide)'#10 +
+    '  if (abs(rt.w) > 0) e = max(e, saturate((0.75 - dot(c.xyz, rt.xyz)) * 4));'#10 +
+    '  if (abs(d.w) > 0) e = max(e, saturate((0.75 - dot(c.xyz, d.xyz)) * 4));'#10 +
+    '  if (e <= 0) discard;'#10 +
+    '  return float4(c.w < 0 ? HighlightColor.rgb : Outline.rgb, e);'#10 +
+    '}'#10 +
+    'float4 PSComposite(float4 pos : SV_Position) : SV_Target {'#10 +
+    '  int3 p = int3(pos.xy, 0);'#10 +
+    '  float reveal = AuxB.Load(p).r;'#10 +
+    '  if (reveal >= 1) discard;'#10 +
+    '  float4 sum = AuxA.Load(p);'#10 +
+    '  return float4(sum.rgb / max(sum.a, 1e-5), 1 - reveal);'#10 +
     '}'#10;
 
 type
@@ -226,7 +326,7 @@ type
 
   TFrameConstants = record
     ViewProj: TMat4F;
-    Eye, LightDir, Sky, Ground, Highlight: TColor4;
+    Eye, LightDir, Sky, Ground, Highlight, DepthOrigin, Forward, Viewport, Outline: TColor4;
   end;
 
   TObjectConstants = record
@@ -243,6 +343,7 @@ type
 
 const
   OverlayCapacity = 1024; // vertices
+  LineWidth = 1.2;        // edges, in 96-DPI pixels
   EdgeColor: TColor4 = (0.02, 0.02, 0.025, 1);
   HighlightColor: TColor4 = (1.0, 0.33, 0.02, 1);
   CullNone = 0;
@@ -289,6 +390,8 @@ begin
   FDev := Dev;
   Mode := rmShadedEdges;
   Preset := mpDrawing;
+  Outlines := True;
+  PixelScale := 1;
   CreatePipeline;
 end;
 
@@ -300,7 +403,7 @@ end;
 
 procedure TDwgRenderer.CreatePipeline;
 var
-  VSCode, PSCode: ID3DBlob;
+  VSCode, PSCode, Code: ID3DBlob;
   Elements: array[0..10] of D3D11_INPUT_ELEMENT_DESC;
   I: Integer;
   Desc: D3D11_BUFFER_DESC;
@@ -317,6 +420,21 @@ begin
     @FVS), 'CreateVertexShader');
   Check(FDev.Device.CreatePixelShader(PSCode.GetBufferPointer, PSCode.GetBufferSize, nil,
     FPS), 'CreatePixelShader');
+  Code := Compile('PSXRay', 'ps_4_0');
+  Check(FDev.Device.CreatePixelShader(Code.GetBufferPointer, Code.GetBufferSize, nil,
+    FXRayPS), 'CreatePixelShader');
+  Code := Compile('PSOutline', 'ps_4_0');
+  Check(FDev.Device.CreatePixelShader(Code.GetBufferPointer, Code.GetBufferSize, nil,
+    FOutlinePS), 'CreatePixelShader');
+  Code := Compile('PSComposite', 'ps_4_0');
+  Check(FDev.Device.CreatePixelShader(Code.GetBufferPointer, Code.GetBufferSize, nil,
+    FCompositePS), 'CreatePixelShader');
+  Code := Compile('VSFull', 'vs_4_0');
+  Check(FDev.Device.CreateVertexShader(Code.GetBufferPointer, Code.GetBufferSize, nil,
+    @FFullVS), 'CreateVertexShader');
+  Code := Compile('GSLine', 'gs_4_0');
+  Check(FDev.Device.CreateGeometryShader(Code.GetBufferPointer, Code.GetBufferSize, nil,
+    FLineGS), 'CreateGeometryShader');
 
   FillChar(Elements, SizeOf(Elements), 0);
   Elements[0].SemanticName := 'POSITION';
@@ -426,6 +544,18 @@ begin
   Blend.RenderTarget[0].BlendOpAlpha := D3D11_BLEND_OP_ADD;
   Blend.RenderTarget[0].RenderTargetWriteMask := $0F;
   Check(FDev.Device.CreateBlendState(Blend, FBlendAlpha), 'CreateBlendState');
+  // x-ray: add colors into target 0, multiply target 1 by 1 - alpha
+  Blend.IndependentBlendEnable := True;
+  Blend.RenderTarget[0].SrcBlend := D3D11_BLEND_ONE;
+  Blend.RenderTarget[0].DestBlend := D3D11_BLEND_ONE;
+  Blend.RenderTarget[0].SrcBlendAlpha := D3D11_BLEND_ONE;
+  Blend.RenderTarget[0].DestBlendAlpha := D3D11_BLEND_ONE;
+  Blend.RenderTarget[1] := Blend.RenderTarget[0];
+  Blend.RenderTarget[1].SrcBlend := D3D11_BLEND_ZERO;
+  Blend.RenderTarget[1].DestBlend := D3D11_BLEND_INV_SRC_COLOR;
+  Blend.RenderTarget[1].SrcBlendAlpha := D3D11_BLEND_ZERO;
+  Blend.RenderTarget[1].DestBlendAlpha := D3D11_BLEND_INV_SRC_ALPHA;
+  Check(FDev.Device.CreateBlendState(Blend, FBlendXRay), 'CreateBlendState');
 
   FillChar(Sampler, SizeOf(Sampler), 0);
   Sampler.Filter := D3D11_FILTER_MIN_MAG_MIP_LINEAR;
@@ -722,7 +852,7 @@ procedure TDwgRenderer.SetFrame(const Camera: TOrbitCamera);
 var
   C: TFrameConstants;
   Mapped: D3D11_MAPPED_SUBRESOURCE;
-  F, R, U, L: TVec3;
+  F, R, U, L, P: TVec3;
 begin
   Camera.Basis(F, R, U);
   C.ViewProj := ToFloat(Camera.ViewProj);
@@ -737,20 +867,31 @@ begin
   C.Sky := Color4(0.30, 0.31, 0.34);
   C.Ground := Color4(0.12, 0.11, 0.10);
   C.Highlight := HighlightColor;
+  // depth for the outlines: from the eye, or in orthographic views from a
+  // point far enough behind it that everything has a positive depth
+  if Camera.Ortho then
+    P := Camera.Target - F * (Camera.Distance + 4 * Max(Camera.SceneBox.Radius, Camera.Distance))
+  else
+    P := Camera.Eye;
+  C.DepthOrigin := Color4(P.X, P.Y, P.Z, 1);
+  C.Forward := Color4(F.X, F.Y, F.Z, 0);
+  C.Viewport := Color4(Camera.Width, Camera.Height, LineWidth * PixelScale,
+    Max(1, Round(PixelScale)));
+  C.Outline := Color4(EdgeColor[0], EdgeColor[1], EdgeColor[2], 0.02);
   Check(FDev.Context.Map(FFrameCB, 0, D3D11_MAP_WRITE_DISCARD, 0, Mapped), 'Map');
   Move(C, Mapped.pData^, SizeOf(C));
   FDev.Context.Unmap(FFrameCB, 0);
 end;
 
 procedure TDwgRenderer.SetObject(const Color: TColor4; Lit, Textured: Boolean; Spec,
-  Shininess, Highlight: Single);
+  Shininess, Highlight, LineWidth: Single);
 var
   C: TObjectConstants;
   Mapped: D3D11_MAPPED_SUBRESOURCE;
 begin
   C.Color := Color;
   C.Shade := Color4(Spec, Shininess, Ord(Lit), Ord(Textured));
-  C.Extra := Color4(Highlight, 0, 0, 0);
+  C.Extra := Color4(Highlight, LineWidth, 0, 0);
   C.Pad := C.Extra;
   Check(FDev.Context.Map(FObjectCB, 0, D3D11_MAP_WRITE_DISCARD, 0, Mapped), 'Map');
   Move(C, Mapped.pData^, SizeOf(C));
@@ -769,6 +910,52 @@ begin
   Offset := 0;
   FDev.Context.IASetVertexBuffers(0, 1, FMeshes[Mesh].VB, @Stride, @Offset);
   FDev.Context.IASetIndexBuffer(FMeshes[Mesh].IB, DXGI_FORMAT_R32_UINT, 0);
+end;
+
+procedure TDwgRenderer.LineShader(On: Boolean);
+var
+  NoInstances: ID3D11ClassInstance;
+begin
+  if On then
+  begin
+    FDev.Context.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
+    FDev.Context.GSSetShader(FLineGS, NoInstances, 0);
+    FDev.Context.GSSetConstantBuffers(0, 1, FFrameCB);
+    FDev.Context.GSSetConstantBuffers(1, 1, FObjectCB);
+  end
+  else
+  begin
+    FDev.Context.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    FDev.Context.GSSetShader(nil, NoInstances, 0);
+  end;
+end;
+
+procedure TDwgRenderer.FullScreenPass(PS: ID3D11PixelShader; const A,
+  B: ID3D11ShaderResourceView);
+var
+  NoInstances: ID3D11ClassInstance;
+  NoView: ID3D11ShaderResourceView;
+begin
+  with FDev.Context do
+  begin
+    IASetInputLayout(nil);
+    IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    VSSetShader(FFullVS, NoInstances, 0);
+    PSSetShader(PS, NoInstances, 0);
+    PSSetShaderResources(1, 1, A);
+    PSSetShaderResources(2, 1, B);
+    RSSetState(FRasterSolid[False, CullNone]);
+    OMSetDepthStencilState(FDepthOff, 0);
+    Draw(3, 0);
+    Inc(FDrawCalls);
+    // unbind: the textures are render targets again next frame
+    PSSetShaderResources(1, 1, NoView);
+    PSSetShaderResources(2, 1, NoView);
+    IASetInputLayout(FLayout);
+    VSSetShader(FVS, NoInstances, 0);
+    PSSetShader(FPS, NoInstances, 0);
+  end;
+  FCurrentMesh := -1;
 end;
 
 procedure TDwgRenderer.DrawFaces(Faces: TRenderMode; Transparent: Boolean; Bias: Boolean);
@@ -974,14 +1161,9 @@ var
     Colors := Colors + [C];
   end;
 
-  // two pixels wide: once more, shifted by a pixel on screen
   procedure Add(const A, B: TVec3; const C: TColor4);
-  var
-    D: TVec3;
   begin
     AddLine(A, B, C);
-    D := (R + U) * (0.7 * FCamera.PixelSize((A + B) * 0.5));
-    AddLine(A + D, B + D, C);
   end;
 
 begin
@@ -993,7 +1175,7 @@ begin
   // markers: a few pixels across whatever the zoom, in the screen plane
   for I := 0 to High(Markers) do
   begin
-    S := 6 * FCamera.PixelSize(Markers[I].P);
+    S := 6 * PixelScale * FCamera.PixelSize(Markers[I].P);
     with Markers[I] do
       case Kind of
         mkVertex: // square
@@ -1033,7 +1215,7 @@ begin
   Stride := SizeOf(TVertex);
   Offset := 0;
   FDev.Context.IASetVertexBuffers(0, 1, FOverlayVB, @Stride, @Offset);
-  FDev.Context.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
+  LineShader(True);
   FDev.Context.RSSetState(FRasterSolid[False, CullNone]);
   FDev.Context.OMSetDepthStencilState(FDepthOff, 0);
   FillChar(BlendFactor, SizeOf(BlendFactor), 0);
@@ -1041,9 +1223,10 @@ begin
   // the identity instance after the scene's instances
   for I := 0 to N div 2 - 1 do
   begin
-    SetObject(Colors[I], False, False, 0, 1, 0);
+    SetObject(Colors[I], False, False, 0, 1, 0, 2); // two line widths
     FDev.Context.DrawInstanced(2, 1, 2 * I, Length(FInstances));
   end;
+  LineShader(False);
 end;
 
 procedure TDwgRenderer.Render(Target: TRenderTarget; const Camera: TOrbitCamera);
@@ -1053,7 +1236,11 @@ var
   NoInstances: ID3D11ClassInstance;
   Edges, Bias: Boolean;
   Stride, Offset: UINT;
+  Targets: array[0..1] of ID3D11RenderTargetView;
+  Zero, One: TFourSingleArray;
 begin
+  Zero := Color4(0, 0, 0, 0);
+  One := Color4(1, 1, 1, 1);
   FDrawCalls := 0;
   FCurrentMesh := -1;
   FCamera := Camera;
@@ -1085,55 +1272,77 @@ begin
 
   Edges := Mode in [rmShadedEdges, rmHiddenLine, rmWireframe, rmXRay];
   Bias := Mode in [rmShadedEdges, rmHiddenLine];
-  FDev.Context.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+  LineShader(False);
   case Mode of
-    rmShaded, rmShadedEdges:
+    rmShaded, rmShadedEdges, rmHiddenLine:
       begin
         FDev.Context.OMSetDepthStencilState(FDepthWrite, 0);
-        DrawFaces(Mode, False, Bias);
-        FDev.Context.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
-        DrawLines(True, False);
-        FDev.Context.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        FDev.Context.OMSetDepthStencilState(FDepthTest, 0);
-        FDev.Context.OMSetBlendState(FBlendAlpha, BlendFactor, $FFFFFFFF);
-        DrawFaces(Mode, True, Bias);
-        FDev.Context.OMSetBlendState(nil, BlendFactor, $FFFFFFFF);
-      end;
-    rmHiddenLine:
-      begin
-        FDev.Context.OMSetDepthStencilState(FDepthWrite, 0);
-        DrawFaces(Mode, False, True);
-        FDev.Context.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
-        DrawLines(True, True);
+        if Outlines and (Mode in [rmShadedEdges, rmHiddenLine]) then
+        begin
+          // opaque faces into color and normal + 1 / depth, then the outlines
+          Targets[0] := Target.RTV;
+          Targets[1] := Target.Aux(0, DXGI_FORMAT_R16G16B16A16_FLOAT);
+          FDev.Context.ClearRenderTargetView(Targets[1], Zero);
+          FDev.Context.OMSetRenderTargets(2, Targets[0], Target.DSV);
+          DrawFaces(Mode, False, Bias);
+          FDev.Context.OMSetRenderTargets(1, Target.RTV, Target.DSV);
+          FDev.Context.OMSetBlendState(FBlendAlpha, BlendFactor, $FFFFFFFF);
+          FullScreenPass(FOutlinePS, Target.ResolveAux(0), nil);
+          FDev.Context.OMSetBlendState(nil, BlendFactor, $FFFFFFFF);
+          FDev.Context.OMSetDepthStencilState(FDepthWrite, 0);
+        end
+        else
+          DrawFaces(Mode, False, Bias);
+        LineShader(True);
+        DrawLines(True, Mode = rmHiddenLine);
+        LineShader(False);
+        if Mode <> rmHiddenLine then
+        begin
+          FDev.Context.OMSetDepthStencilState(FDepthTest, 0);
+          FDev.Context.OMSetBlendState(FBlendAlpha, BlendFactor, $FFFFFFFF);
+          DrawFaces(Mode, True, Bias);
+          FDev.Context.OMSetBlendState(nil, BlendFactor, $FFFFFFFF);
+        end;
       end;
     rmWireframe:
       begin
-        FDev.Context.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
+        LineShader(True);
         DrawLines(False, False);
       end;
     rmTriangles:
       begin
         FDev.Context.OMSetDepthStencilState(FDepthOff, 0);
         DrawFaces(Mode, False, False);
-        FDev.Context.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
+        LineShader(True);
         DrawLines(False, False);
       end;
     rmXRay:
       begin
-        // faint faces without depth writes: everything behind shows through
+        // order-independent: sums into two extra targets, then composed
+        Targets[0] := Target.Aux(0, DXGI_FORMAT_R16G16B16A16_FLOAT);
+        Targets[1] := Target.Aux(1, DXGI_FORMAT_R16_FLOAT);
+        FDev.Context.ClearRenderTargetView(Targets[0], Zero);
+        FDev.Context.ClearRenderTargetView(Targets[1], One);
+        FDev.Context.OMSetRenderTargets(2, Targets[0], nil);
         FDev.Context.OMSetDepthStencilState(FDepthOff, 0);
-        FDev.Context.OMSetBlendState(FBlendAlpha, BlendFactor, $FFFFFFFF);
+        FDev.Context.OMSetBlendState(FBlendXRay, BlendFactor, $FFFFFFFF);
+        FDev.Context.PSSetShader(FXRayPS, NoInstances, 0);
         DrawFaces(Mode, False, False);
+        FDev.Context.PSSetShader(FPS, NoInstances, 0);
+        FDev.Context.OMSetRenderTargets(1, Target.RTV, Target.DSV);
+        FDev.Context.OMSetBlendState(FBlendAlpha, BlendFactor, $FFFFFFFF);
+        FullScreenPass(FCompositePS, Target.ResolveAux(0), Target.ResolveAux(1));
         FDev.Context.OMSetBlendState(nil, BlendFactor, $FFFFFFFF);
-        FDev.Context.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
+        LineShader(True);
         DrawLines(False, False);
       end;
   end;
   if Edges then
   begin
-    FDev.Context.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
+    LineShader(True);
     DrawEdges(Mode in [rmShadedEdges, rmHiddenLine], EdgeColor);
   end;
+  LineShader(False);
   DrawOverlay;
 end;
 

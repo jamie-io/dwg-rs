@@ -5,7 +5,8 @@
 
     DwgViewer [FILE.dwg] [--warp]
     DwgViewer FILE.dwg --screenshot OUT.png [--size WxH] [--view NAME]
-      [--material NAME] [--ortho] [--select NODE] [--measure X1,Y1,X2,Y2] [--warp]
+      [--material NAME] [--ortho] [--no-outlines] [--scale S] [--select NODE]
+      [--measure X1,Y1,X2,Y2] [--warp]
 
   --warp        use WARP (software rendering) even when a GPU is there
   --screenshot  render one frame per mode offscreen into OUT-<mode>.png and exit
@@ -14,6 +15,8 @@
   --view        front, back, left, right, top, bottom or iso (default)
   --material    drawing (default), clay, metal or glass
   --ortho       orthographic projection
+  --no-outlines no silhouette lines
+  --scale       screen pixels per 96-DPI pixel (line widths, markers), default 1
   --select      highlight the instances below node NODE (as the block tree does)
   --measure     snap at two pixels and measure, drawn into OUT-measure.png
 
@@ -83,8 +86,13 @@ begin
 end;
 
 function Flag(const Name: string): Boolean;
+var
+  I: Integer;
 begin
-  Result := FindCmdLineSwitch(Copy(Name, 3, MaxInt), ['-'], True);
+  for I := 1 to ParamCount do
+    if ParamStr(I) = Name then
+      Exit(True);
+  Result := False;
 end;
 
 function MatchStr(const S: string; const Values: array of string): Boolean;
@@ -107,7 +115,7 @@ begin
   begin
     if ParamStr(I).StartsWith('--') then
     begin
-      if not MatchStr(ParamStr(I), ['--warp', '--ortho']) then
+      if not MatchStr(ParamStr(I), ['--warp', '--ortho', '--no-outlines']) then
         Inc(I); // skip the value
     end
     else
@@ -195,6 +203,9 @@ begin
     Camera.Fit(Doc.Box);
     if Option('--material', S) then
       Renderer.Preset := ParseMaterial(S);
+    Renderer.Outlines := not Flag('--no-outlines');
+    if Option('--scale', S) then
+      Renderer.PixelScale := StrToFloat(S, Fmt);
     if Option('--select', S) then
       Renderer.SetHighlight(Doc.SubtreeInstances(StrToInt(S)));
 

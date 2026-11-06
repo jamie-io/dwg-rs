@@ -45,6 +45,16 @@ type
     property Samples: Integer read FSamples;
   end;
 
+  { An extra color buffer of the target's size and sample count, made when
+    first asked for, with a single-sample copy shaders can read. }
+  TAuxBuffer = record
+    Format: DXGI_FORMAT;
+    Texture: ID3D11Texture2D;  // MSAA when Samples > 1
+    Resolved: ID3D11Texture2D;
+    RTV: ID3D11RenderTargetView;
+    SRV: ID3D11ShaderResourceView; // of Resolved
+  end;
+
   { Color and depth buffers of one size. Render into RTV/DSV, then Present
     (window) or ReadPixels (offscreen). }
   TRenderTarget = class
@@ -58,6 +68,7 @@ type
     FRTV: ID3D11RenderTargetView;
     FDSV: ID3D11DepthStencilView;
     FWidth, FHeight: Integer;
+    FAux: array[0..1] of TAuxBuffer;
     procedure CreateBuffers;
     procedure ReleaseBuffers;
     procedure Resolve;
@@ -73,6 +84,11 @@ type
     function Present: Boolean;
     { The frame as RGBA bytes, rows top down, sRGB encoded, alpha 255. }
     function ReadPixels: TBytes;
+    { Extra buffer Index (0 or 1) in Format, created on first use. }
+    function Aux(Index: Integer; Format: DXGI_FORMAT): ID3D11RenderTargetView;
+    { Copy extra buffer Index into its single-sample texture and return
+      the view shaders read it through. }
+    function ResolveAux(Index: Integer): ID3D11ShaderResourceView;
     property RTV: ID3D11RenderTargetView read FRTV;
     property DSV: ID3D11DepthStencilView read FDSV;
     property Width: Integer read FWidth;
@@ -250,6 +266,56 @@ begin
   FColor := nil;
   FResolved := nil;
   FDepth := nil;
+  for var I := 0 to High(FAux) do
+  begin
+    FAux[I].RTV := nil;
+    FAux[I].SRV := nil;
+    FAux[I].Texture := nil;
+    FAux[I].Resolved := nil;
+  end;
+end;
+
+function TRenderTarget.Aux(Index: Integer; Format: DXGI_FORMAT): ID3D11RenderTargetView;
+var
+  Desc: D3D11_TEXTURE2D_DESC;
+begin
+  if (FAux[Index].RTV = nil) or (FAux[Index].Format <> Format) then
+  begin
+    FillChar(Desc, SizeOf(Desc), 0);
+    Desc.Width := FWidth;
+    Desc.Height := FHeight;
+    Desc.MipLevels := 1;
+    Desc.ArraySize := 1;
+    Desc.Format := Format;
+    Desc.SampleDesc.Count := 1;
+    Desc.Usage := D3D11_USAGE_DEFAULT;
+    Desc.BindFlags := D3D11_BIND_RENDER_TARGET or D3D11_BIND_SHADER_RESOURCE;
+    Check(FDev.Device.CreateTexture2D(Desc, nil, FAux[Index].Resolved), 'CreateTexture2D(aux)');
+    Check(FDev.Device.CreateShaderResourceView(FAux[Index].Resolved, nil, FAux[Index].SRV),
+      'CreateShaderResourceView(aux)');
+    if FDev.Samples > 1 then
+    begin
+      Desc.SampleDesc.Count := FDev.Samples;
+      Desc.BindFlags := D3D11_BIND_RENDER_TARGET;
+      Check(FDev.Device.CreateTexture2D(Desc, nil, FAux[Index].Texture), 'CreateTexture2D(aux MSAA)');
+    end
+    else
+      FAux[Index].Texture := FAux[Index].Resolved;
+    Check(FDev.Device.CreateRenderTargetView(FAux[Index].Texture, nil, FAux[Index].RTV),
+      'CreateRenderTargetView(aux)');
+    FAux[Index].Format := Format;
+  end;
+  Result := FAux[Index].RTV;
+end;
+
+function TRenderTarget.ResolveAux(Index: Integer): ID3D11ShaderResourceView;
+begin
+  with FAux[Index] do
+  begin
+    if Texture <> Resolved then
+      FDev.Context.ResolveSubresource(Resolved, 0, Texture, 0, Format);
+    Result := SRV;
+  end;
 end;
 
 procedure TRenderTarget.Resize(Width, Height: Integer);
