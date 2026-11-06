@@ -1,0 +1,181 @@
+<!doctype html>
+<!-- SPDX-FileCopyrightText: 2026 Jamie Jahn
+     SPDX-License-Identifier: GPL-3.0-or-later -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dwg-rs: DWG to glTF in the browser</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 1 15 5v6l-7 4-7-4V5z' fill='%232a64c9'/%3E%3C/svg%3E">
+<meta name="description" content="Open AutoCAD DWG drawings in 3D in your browser: dwg-rs converts them to glTF with WebAssembly, locally, nothing is uploaded.">
+<style>
+	:root {
+		--bg: #f3f3ef; --panel: #fbfbf9; --text: #1d1d1b; --muted: #6b6b66;
+		--line: #dcdcd5; --accent: #2a64c9; --accent-soft: #e3ebf8; --error: #b42318;
+		--view: #e6e6e0; --card: #ecece6; --chip: #ffffffcc; --on-accent: #ffffff;
+		color-scheme: light dark;
+	}
+	@media (prefers-color-scheme: dark) {
+		:root {
+			--bg: #141413; --panel: #1b1b1a; --text: #ececea; --muted: #9a9a94;
+			--line: #31312d; --accent: #78a3f2; --accent-soft: #1f2a3d; --error: #f97066;
+			--view: #222221; --card: #262625; --chip: #1b1b1acc; --on-accent: #0d1626;
+		}
+	}
+	* { box-sizing: border-box; }
+	html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+		font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+	body { display: grid; grid-template-columns: 360px minmax(0, 1fr); }
+	a { color: var(--accent); }
+	code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+	button { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line);
+		border-radius: 7px; padding: 5px 11px; cursor: pointer; }
+	button:hover:not(:disabled) { border-color: var(--accent); }
+	button[aria-pressed=true] { background: var(--accent-soft); border-color: var(--accent); }
+	button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+	button:disabled { opacity: .45; cursor: default; }
+	.hidden { display: none !important; }
+
+	/* sidebar */
+	aside { background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto;
+		padding: 20px 18px; display: flex; flex-direction: column; gap: 18px; }
+	header h1 { font-size: 21px; margin: 0; letter-spacing: -.01em; }
+	header h1 span { color: var(--muted); font-weight: 500; }
+	header p { margin: 6px 0 0; color: var(--muted); }
+	h2 { font-size: 11.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted);
+		margin: 0 0 8px; font-weight: 600; }
+	.intro p { margin: 0 0 8px; }
+	.links { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+
+	#drop { border: 1.5px dashed var(--line); border-radius: 10px; padding: 16px 12px; text-align: center; }
+	#drop p { margin: 8px 0 0; color: var(--muted); font-size: 12.5px; }
+
+	.group + .group { margin-top: 14px; }
+	.group h3 { font-size: 12.5px; margin: 0 0 6px; font-weight: 600; }
+	.grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+	.card { display: flex; flex-direction: column; align-items: stretch; gap: 2px; padding: 4px 4px 5px;
+		background: var(--card); border: 1px solid transparent; border-radius: 8px; text-align: left; }
+	.card:hover { border-color: var(--accent); }
+	.card[aria-current=true] { border-color: var(--accent); background: var(--accent-soft); }
+	.card img { width: 100%; height: auto; aspect-ratio: 1; object-fit: contain; display: block; }
+	.card .thumb-none { width: 100%; aspect-ratio: 1; display: grid; place-items: center; color: var(--muted); font-size: 11px; }
+	.card .name { font-size: 11.5px; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.card .ver { font-size: 10.5px; color: var(--muted); }
+
+	footer { margin-top: auto; color: var(--muted); font-size: 12px; display: grid; gap: 6px; }
+	footer p { margin: 0; }
+
+	/* viewer */
+	main { position: relative; min-width: 0; min-height: 0; background: var(--view); }
+	canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+	.toolbar { position: absolute; top: 12px; right: 12px; display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+	.toolbar button { background: var(--chip); backdrop-filter: blur(6px); }
+	#info { position: absolute; left: 12px; bottom: 12px; max-width: min(460px, calc(100% - 24px));
+		background: var(--chip); backdrop-filter: blur(6px); border: 1px solid var(--line); border-radius: 10px;
+		padding: 10px 12px; font-size: 12.5px; }
+	#info .title { font-weight: 600; font-size: 13.5px; overflow-wrap: anywhere; }
+	#info dl { display: grid; grid-template-columns: auto 1fr; gap: 1px 12px; margin: 6px 0 0; }
+	#info dt { color: var(--muted); }
+	#info dd { margin: 0; font-variant-numeric: tabular-nums; }
+	#info details { margin-top: 6px; }
+	#info summary { cursor: pointer; color: var(--muted); }
+	pre { margin: 4px 0 0; white-space: pre-wrap; word-break: break-word; max-height: 30vh; overflow: auto;
+		font: 11.5px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+	#info .error { color: var(--error); white-space: pre-wrap; margin-top: 4px; }
+	#empty { position: absolute; inset: 0; display: grid; place-items: center; text-align: center;
+		color: var(--muted); pointer-events: none; padding: 24px; }
+	#busy { position: absolute; top: 14px; left: 14px; display: flex; align-items: center; gap: 8px;
+		background: var(--chip); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px 4px 8px; font-size: 12.5px; }
+	#busy::before { content: ""; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--line);
+		border-top-color: var(--accent); animation: spin .8s linear infinite; }
+	@keyframes spin { to { transform: rotate(360deg); } }
+	#dropOverlay { position: fixed; inset: 0; display: grid; place-items: center; z-index: 10;
+		background: color-mix(in srgb, var(--accent) 18%, transparent); border: 3px dashed var(--accent);
+		font-size: 18px; font-weight: 600; color: var(--accent); pointer-events: none; }
+
+	@media (max-width: 760px) {
+		body { grid-template-columns: 1fr; grid-template-rows: 60vh auto; height: auto; }
+		html, body { height: auto; }
+		main { order: 1; height: 60vh; }
+		aside { order: 2; border-right: 0; border-top: 1px solid var(--line); overflow: visible; padding: 16px; }
+		.grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+	}
+	@media (max-width: 420px) { .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+</style>
+<script type="importmap">
+	{
+		"imports": {
+			"three": "./vendor/three/build/three.module.js",
+			"three/addons/": "./vendor/three/examples/jsm/"
+		}
+	}
+</script>
+</head>
+<body>
+<aside>
+	<header>
+		<h1>dwg-rs <span>demo</span></h1>
+		<p>AutoCAD DWG drawings in 3D, converted right here in your browser.</p>
+	</header>
+
+	<section class="intro">
+		<p><strong>dwg-rs</strong> converts DWG files to glTF 2.0. It is written in Rust, reads
+			ACIS solids and surfaces with its own B-rep tessellator, keeps materials and
+			textures, and runs as a three.js loader compiled to WebAssembly: that is what
+			this page uses.</p>
+		<div class="links">
+			<a href="https://github.com/jamie-io/dwg-rs">Source on GitHub</a>
+			<a href="https://github.com/jamie-io/dwg-rs/tree/main/packages/three-dwg-loader">three.js loader</a>
+		</div>
+	</section>
+
+	<section>
+		<h2>Your drawing</h2>
+		<div id="drop">
+			<button id="open" class="primary" type="button">Open a DWG file…</button>
+			<p>or drop it anywhere on this page (with its texture images, if any).
+				<strong>Nothing is uploaded</strong>: the file is converted locally, in your browser.</p>
+		</div>
+		<input id="files" type="file" accept=".dwg,.png,.jpg,.jpeg" multiple class="hidden">
+	</section>
+
+	<section>
+		<h2>Sample drawings</h2>
+		<div id="gallery"><p class="muted">Loading the list…</p></div>
+	</section>
+
+	<footer>
+		<p>dwg-rs is free software under the
+			<a href="https://github.com/jamie-io/dwg-rs/blob/main/LICENSE">GPL-3.0-or-later</a>.
+			DWG decoding by <a href="https://www.gnu.org/software/libredwg/">GNU LibreDWG</a>
+			(GPL-3.0-or-later), compiled into the WebAssembly module;
+			rendering by <a href="https://threejs.org/">three.js</a>
+			(<a href="vendor/three/LICENSE.txt">MIT</a>).</p>
+		<p>The samples are test drawings of the project, written by BricsCAD in each DWG version
+			from R14 to 2018.</p>
+		<p>DWG is the native file format of AutoCAD, a trademark of Autodesk, Inc. This project
+			is not affiliated with Autodesk.</p>
+	</footer>
+</aside>
+<main>
+	<canvas id="view"></canvas>
+	<div id="empty">Pick a sample drawing or open a DWG file.</div>
+	<div class="toolbar">
+		<button id="fit" type="button" title="Frame the drawing (F)" disabled>Fit</button>
+		<button id="wire" type="button" aria-pressed="false" title="Wireframe (W)" disabled>Wireframe</button>
+		<button id="lines" type="button" aria-pressed="true" title="Convert wire geometry (lines, arcs, polylines)">Lines</button>
+		<button id="download" type="button" title="Save the converted glTF binary" disabled>Download GLB</button>
+	</div>
+	<div id="busy" class="hidden">Converting…</div>
+	<div id="info" class="hidden">
+		<div class="title" id="infoTitle"></div>
+		<dl id="stats"></dl>
+		<div class="error hidden" id="error"></div>
+		<details id="warningsBox" class="hidden"><summary id="warningsSummary"></summary><pre id="warnings"></pre></details>
+		<details id="reportBox" class="hidden"><summary>Converter summary</summary><pre id="summary"></pre></details>
+	</div>
+</main>
+<div id="dropOverlay" class="hidden">Drop the DWG file to convert it locally</div>
+<script type="module" src="app.js"></script>
+</body>
+</html>
