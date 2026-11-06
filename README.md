@@ -316,7 +316,7 @@ Windows with the `x86_64-pc-windows-msvc` target should work the same way
 
 ## Delphi viewer example
 
-![Measuring with snapping, hidden line and x-ray](examples/delphi/viewer/screenshot.png)
+![Measuring between circle centers and from an arc's midpoint, silhouettes in hidden line, x-ray](examples/delphi/viewer/screenshot.png)
 
 [`examples/delphi/viewer`](examples/delphi/viewer) is a Direct3D 11 viewer
 for DWG files in Delphi (Win64) on top of `dwg2gltf.dll`, meant as a
@@ -340,21 +340,42 @@ but the DLL and Windows' own `d3d11`, `dxgi`, `d3dcompiler_47`,
   compiled at start with `D3DCompile`.
 - **Modes** (keys 1 to 6): shaded, shaded with edges, hidden line (white
   faces, black edges), wireframe (edges only), triangles, x-ray. The edges
-  are the DLL's visible edges, drawn as lines over faces pushed back by the
-  rasterizer's depth bias.
+  are the DLL's visible edges, drawn over faces pushed back by the
+  rasterizer's depth bias, as quads from a geometry shader so their width
+  follows the DPI.
+- **Silhouettes** (S): the DLL's edges are creases and boundaries, so a
+  sphere, a cylinder's side or a fillet has no line along its outline. In
+  shaded with edges and hidden line the faces also write their normal and
+  1 / depth into a second target, and a full-screen pass draws a line
+  where 1 / depth bends (it is linear across any plane, so only outlines
+  and steps show) or the normal jumps (parts meeting at an angle).
+- **X-ray**: weighted blended order-independent transparency (colors
+  summed, coverage multiplied in two extra targets, then composed), so the
+  picture does not depend on the drawing order and stays still while the
+  view turns.
 - **Camera**: orbit (left drag), pan (right or middle drag, or shift and
   left drag), zoom to the cursor (wheel), fit (F), front/back/left/right/
   top/bottom/isometric views, perspective or orthographic (O).
 - **Measuring** (M): click two points; the CPU picker (ray against each
-  instance's box, then a bounding volume hierarchy per mesh) snaps to end
-  points, midpoints and points of the visible edges and of line geometry
-  within 12 pixels, skips points hidden by other geometry, and falls back
-  to the surface. The status bar shows the snap and the distance with its
-  components along the drawing's axes, in millimeters.
+  instance's box, then a bounding volume hierarchy per mesh) snaps within
+  12 pixels to end points, midpoints, centers and points of the visible
+  edges and of line geometry, skips points hidden by other geometry, and
+  falls back to the surface. Edges are joined into chains where two meet
+  without turning by more than 45 degrees, so a tessellated arc snaps to
+  its own end points and the midpoint halfway along it, and a closed round
+  chain (a circle, a hole's rim) to its center. The status bar shows the
+  snap and the distance with its components along the drawing's axes, in
+  millimeters.
 - **Material presets**: as in the drawing, white clay, grey metal, glass.
 - **Block tree**: the scene's nodes (block name, handle) in a tree view
   that fills on expansion; selecting a node highlights its instances, and
   clicking an object in the view selects its block instance in the tree.
+- **Window**: the drawing is converted on a worker thread (the status bar
+  counts the seconds, Esc drops the result) and uploaded on the UI thread
+  when it arrives; `DwgViewer.manifest` asks for themed controls and
+  per-monitor DPI awareness, and fonts, line widths, markers and the snap
+  radius follow the DPI. No resource compiler is needed:
+  `make_res.py` writes `DwgViewer.res` from the manifest.
 
 The units are layered so the rendering part can be copied as it is:
 `Dwg2Gltf.Math` (vectors, matrices, ray tests), `Dwg2Gltf.Camera`,
@@ -372,13 +393,14 @@ cd examples/delphi/viewer && dcc64 DwgViewer.dpr  # put dwg2gltf.dll next to Dwg
 DwgViewer chair.dwg                                # the window
 DwgViewer chair.dwg --screenshot out.png           # out-shaded.png, out-edges.png, ... and exit
           [--size 960x720] [--view iso] [--material clay] [--ortho] [--warp]
-          [--select NODE] [--measure X1,Y1,X2,Y2]
+          [--no-outlines] [--scale 1.5] [--select NODE] [--measure X1,Y1,X2,Y2]
 ```
 
 `--screenshot` renders every mode offscreen into PNG files without opening
 a window and prints the device, the scene, the draw calls and the frame
-time; `--warp` forces software rendering; `--measure` snaps at two pixels
-and draws the measurement into `out-measure.png`.
+time; `--warp` forces software rendering; `--scale` renders as for a
+screen at that many times 96 DPI; `--measure` snaps at two pixels and
+draws the measurement into `out-measure.png`.
 
 `scripts/build-delphi-viewer.sh` cross-builds the DLL, compiles the viewer
 and `PickingTest.dpr` (picking against brute force, camera rays and
@@ -386,14 +408,14 @@ projection, snapping, without a GPU) with `DCC64`, runs the test under
 Wine and renders BricsCAD test drawings in every mode into
 `target/delphi-viewer/`. Wine's Direct3D 11 runs on OpenGL or Vulkan and
 needs a display; it has no WARP (`--warp` uses the GPU there). Under Wine
-on a Wayland desktop the first frame after the window opens may not show
-until the next repaint (any mouse or mode key). Compiled with Delphi 13
-(dcc64).
+a frame presented while the window is being shown can stay invisible, so
+the view presents two more shortly after. Compiled with Delphi 13 (dcc64).
 
-Not done: silhouette lines (the DLL's edges leave smooth curved surfaces
-without lines, so hidden line shows only their rims), normal maps,
-order-independent transparency in x-ray, conversion on a worker thread,
-per-monitor DPI.
+Not done: normal maps; cancelling a conversion inside the DLL (Esc only
+drops its result, the thread runs to the end); silhouettes of transparent
+faces; the first snap on a large drawing waits for the mesh's bounding
+volume hierarchy (a few hundred milliseconds), which a production viewer
+would build in the background.
 
 ## What gets converted
 

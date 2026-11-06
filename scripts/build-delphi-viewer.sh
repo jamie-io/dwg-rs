@@ -46,7 +46,10 @@ if [ "$#" -eq 0 ]; then
         tests/bricscad/dwg/v27/fillet/fillet_small/fillet_small_AC1032.dwg \
         tests/bricscad/dwg/v27/sweep/sweep_circle_helix/sweep_circle_helix_AC1032.dwg \
         tests/bricscad/dwg/v27/sheet/sheet_mesh/sheet_mesh_AC1032.dwg \
-        tests/bricscad/dwg/v27/trim/trim_cylinder_hole/trim_cylinder_hole_AC1032.dwg
+        tests/bricscad/dwg/v27/trim/trim_cylinder_hole/trim_cylinder_hole_AC1032.dwg \
+        tests/bricscad/dwg/v27/primitive/cylinder/cylinder_AC1032.dwg \
+        tests/bricscad/dwg/v27/primitive/torus/torus_AC1032.dwg \
+        tests/bricscad/dwg/v27/revolve/revolve_ring_120/revolve_ring_120_AC1032.dwg
 fi
 files=()
 for f in "$@"; do

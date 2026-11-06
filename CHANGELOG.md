@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-07
+
+- Delphi viewer example: silhouette lines, order-independent x-ray, line widths and sizes that follow the DPI, snapping to arc midpoints and circle centers, drawings converted on a worker thread, themed controls
+
 ## 2026-11-06
 
 - Delphi example: a Direct3D 11 viewer on dwg2gltf.dll (`examples/delphi/viewer`) with shaded, edge, hidden-line, wireframe and x-ray modes, instanced drawing, measuring with snapping, material presets and a block tree, built and tested by `scripts/build-delphi-viewer.sh`
