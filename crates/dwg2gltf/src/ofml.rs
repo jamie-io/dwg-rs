@@ -14,6 +14,9 @@ use zip::write::SimpleFileOptions;
 pub const PXCAD_DICT: &str = "PXCAD_DICT";
 /// Dictionary of material archives (XRECORDs of 310 chunks), keyed by MATERIAL name.
 pub const MATERIAL_DICT: &str = "EDWG_MATERIAL_DICT";
+/// Dictionary of texture images (XRECORDs of 310 chunks), keyed by the file
+/// name a MATERIAL's diffuse map refers to.
+pub const TEXTURE_DICT: &str = "EDWG_TEXTURE_DICT";
 /// MATERIAL extension record pointing to the base material of a derived one.
 pub const BASE_MATERIAL: &str = "EDWG_BASE_MATERIAL";
 /// MESH extension record: per-vertex u/v doubles in 310 chunks.

@@ -1838,9 +1838,14 @@ impl<'a> Converter<'a> {
             let mdef = self.doc.material(material);
             let textured = mdef.as_ref().is_some_and(|m| m.has_maps());
             let data = match &mdef {
+                // OFML projects in meters, AutoCAD in drawing units
                 Some(m) if textured => builder.build(
                     Some(m.projection),
-                    mul(geoscale, self.unit),
+                    if m.ofml {
+                        mul(geoscale, self.unit)
+                    } else {
+                        geoscale
+                    },
                     Some(m.uv_matrix),
                     origin,
                 ),
