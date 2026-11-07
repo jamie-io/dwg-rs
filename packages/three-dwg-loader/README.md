@@ -1,4 +1,4 @@
-# three-dwg-loader
+# @jamie-io/three-dwg-loader
 
 A [three.js](https://threejs.org) loader for AutoCAD DWG files. It runs
 dwg2gltf, compiled to WebAssembly, in a worker. The converter is the same
@@ -7,7 +7,7 @@ ACIS solids, MESH, polyfaces, block instances and series DWGs. three.js's
 `GLTFLoader` then builds the scene. three.js itself is not patched.
 
 ```js
-import { DWGLoader } from 'three-dwg-loader';
+import { DWGLoader } from '@jamie-io/three-dwg-loader';
 
 const loader = new DWGLoader();
 const object = await loader.loadAsync( 'chair.dwg' ); // meters, Y up
@@ -18,22 +18,32 @@ console.log( object.userData.dwg.summary ); // what was converted and skipped
 `DWGExporter` goes the other way: three.js objects to DWG, with the
 `gltf2dwg` code (see [Export](#export)).
 
+## Install
+
+```sh
+npm install @jamie-io/three-dwg-loader three
+```
+
+three.js (r160 or later) is a peer dependency. The package carries the
+WebAssembly module, about 11 MB, or 1.5 MB served with brotli (2.7 MB with
+gzip); see [Deploying](#deploying) for serving it.
+
 ## Build
 
-The `.wasm` file is built, not checked in. You need the `wasm32-wasip1`
-Rust target and [wasi-sdk](https://github.com/WebAssembly/wasi-sdk/releases)
-(unpacked to `~/opt/wasi-sdk`, or set `WASI_SDK_PATH`). binaryen's
-`wasm-opt` is optional.
+To build the module from the repository instead, you need the
+`wasm32-wasip1` Rust target and
+[wasi-sdk](https://github.com/WebAssembly/wasi-sdk/releases) (unpacked to
+`~/opt/wasi-sdk`, or set `WASI_SDK_PATH`). binaryen's `wasm-opt` is
+optional.
 
 ```sh
 rustup target add wasm32-wasip1
 scripts/build-wasm.sh           # -> packages/three-dwg-loader/wasm/dwg2gltf.wasm
 ```
 
-The module is about 10 MB, or 1.3 MB served with brotli (2.4 MB with gzip).
-Install the package into an app from this folder, for example with
-`npm install ../dwg-rs/packages/three-dwg-loader`, or with `npm pack`
-and the tarball. three.js (r160 or later) is a peer dependency.
+Then install the folder into an app, for example with
+`npm install ../dwg-rs/packages/three-dwg-loader`, or with `npm pack` and
+the tarball.
 
 ## Use
 
@@ -61,7 +71,7 @@ Options:
 | --- | --- | --- |
 | `lines` | `true` | Wire geometry (lines, arcs, polylines) as `LineSegments` |
 | `planSymbols` | `false` | OFML 2D plan symbols (outlines on `..._D2_...` layers) |
-| `units` | `null` | Override the drawing's units: `'mm'`, `'cm'`, `'dm'`, `'m'`, `'km'`, `'in'`, `'ft'`, `'yd'`, `'mi'`. `'auto'`: the drawing's, but meters when it would be less than 1 cm across in millimeters, centimeters, decimeters, inches, feet or yards; a series DWG is judged by its largest article, also when `only` asks for some. Use it for OFML DWGs, which are often stored in meters but say millimeters (see the [main README](../../README.md#drawings-in-meters-that-say-millimeters)) |
+| `units` | `null` | Override the drawing's units: `'mm'`, `'cm'`, `'dm'`, `'m'`, `'km'`, `'in'`, `'ft'`, `'yd'`, `'mi'`. `'auto'`: the drawing's, but meters when it would be less than 1 cm across in millimeters, centimeters, decimeters, inches, feet or yards; a series DWG is judged by its largest article, also when `only` asks for some. Use it for OFML DWGs, which are often stored in meters but say millimeters (see the [main README](https://github.com/jamie-io/dwg-rs#drawings-in-meters-that-say-millimeters)) |
 | `zUp` | `false` | Keep the DWG's Z-up axes |
 | `blocks` | `'auto'` | Series DWGs (below). `true`: one object per article. `false`: model space only, like the command line without `--seriesdwg` |
 | `only` | `null` | Series DWGs: convert only these articles (block names) |
@@ -110,7 +120,7 @@ following. It also carries `stderr` (the converter's output) and `report`.
 ## Export
 
 ```js
-import { DWGExporter } from 'three-dwg-loader/exporter';
+import { DWGExporter } from '@jamie-io/three-dwg-loader/exporter';
 
 const exporter = new DWGExporter();
 const dwg = await exporter.parseAsync( object ); // an ArrayBuffer
@@ -153,7 +163,7 @@ about 300 KB.
 - The worker and the `.wasm` are located with
   `new URL( ..., import.meta.url )`, the pattern Vite and webpack 5 bundle
   (not tried here yet). Vite's dependency pre-bundling moves files and
-  breaks such URLs: add `optimizeDeps: { exclude: [ 'three-dwg-loader' ] }`.
+  breaks such URLs: add `optimizeDeps: { exclude: [ '@jamie-io/three-dwg-loader' ] }`.
   Without a bundler, or if it misses them, serve `src/` and `wasm/` as they
   are, or point `setWorkerURL` (to `DWGWorker.js`, with `core.js` and
   `wasi.js` next to it) and `setWasmPath` at your copies.
@@ -163,8 +173,8 @@ about 300 KB.
   page's `<base href>`.
 
   ```json
-  { "glob": "*.js", "input": "node_modules/three-dwg-loader/src", "output": "assets/dwg" },
-  { "glob": "dwg2gltf.wasm", "input": "node_modules/three-dwg-loader/wasm", "output": "assets/dwg" }
+  { "glob": "*.js", "input": "node_modules/@jamie-io/three-dwg-loader/src", "output": "assets/dwg" },
+  { "glob": "dwg2gltf.wasm", "input": "node_modules/@jamie-io/three-dwg-loader/wasm", "output": "assets/dwg" }
   ```
 - The package and the module are GPL-3.0-or-later: dwg2gltf and LibreDWG
   are. An app that ships them must offer their source.

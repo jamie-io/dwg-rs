@@ -236,7 +236,7 @@ typedef struct DwgSceneData {
 
 typedef struct DwgScene DwgScene;
 
-/* Library version ("0.1.0"), static. */
+/* Library version (for example "0.2.0"), static. */
 DWG_API const char *dwg_version(void);
 /* DWG_ABI of the library. */
 DWG_API uint32_t dwg_abi_version(void);

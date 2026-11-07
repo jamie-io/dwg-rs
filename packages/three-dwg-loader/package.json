@@ -1,11 +1,29 @@
 {
-  "name": "three-dwg-loader",
+  "name": "@jamie-io/three-dwg-loader",
   "version": "0.2.0",
   "description": "three.js loader for AutoCAD DWG files (with OFML materials and ACIS solids): dwg2gltf compiled to WebAssembly",
   "type": "module",
-  "private": true,
   "license": "GPL-3.0-or-later",
   "author": "Jamie Jahn",
+  "homepage": "https://jamie-io.github.io/dwg-rs/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jamie-io/dwg-rs.git",
+    "directory": "packages/three-dwg-loader"
+  },
+  "bugs": "https://github.com/jamie-io/dwg-rs/issues",
+  "keywords": [
+    "three",
+    "threejs",
+    "three.js",
+    "loader",
+    "dwg",
+    "autocad",
+    "cad",
+    "gltf",
+    "webassembly",
+    "libredwg"
+  ],
   "exports": {
     ".": {
       "types": "./src/DWGLoader.d.ts",
@@ -24,12 +42,14 @@
   },
   "files": [
     "src",
-    "wasm/dwg2gltf.wasm"
+    "wasm/dwg2gltf.wasm",
+    "LICENSE"
   ],
   "scripts": {
     "build:wasm": "../../scripts/build-wasm.sh",
     "test": "node --test test/*.test.js",
-    "demo": "python3 -m http.server -d . 8080"
+    "demo": "python3 -m http.server -d . 8080",
+    "prepublishOnly": "../../scripts/build-wasm.sh && node --test test/wasm.test.js"
   },
   "peerDependencies": {
     "three": ">=0.160.0"
@@ -37,5 +57,8 @@
   "devDependencies": {
     "gltf-validator": "2.0.0-dev.3.10",
     "three": "0.186.1"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

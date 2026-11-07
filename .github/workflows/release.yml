@@ -1,0 +1,116 @@
+# SPDX-FileCopyrightText: 2026 Jamie Jahn
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Builds the command line tools and the C library for Linux, Windows and
+# macOS. A tag v* puts them into a draft release; run by hand, the archives
+# are only kept as workflow artifacts.
+
+name: Release
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 22.04: glibc 2.35, so the binaries also run on older distributions
+          - { name: linux-x86_64, os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, smoke: true, test: true }
+          - { name: linux-aarch64, os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, smoke: true }
+          - { name: windows-x86_64, os: ubuntu-22.04, target: x86_64-pc-windows-gnu }
+          - { name: macos-aarch64, os: macos-15, target: aarch64-apple-darwin, smoke: true }
+          - { name: macos-x86_64, os: macos-15, target: x86_64-apple-darwin }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          rustup update stable
+          rustup default stable
+          rustup target add ${{ matrix.target }}
+          if [ "${{ matrix.target }}" = x86_64-pc-windows-gnu ]; then
+            sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+          fi
+
+      - name: Test
+        if: matrix.test
+        run: cargo test --release --locked --offline --workspace
+
+      - name: Build
+        shell: bash
+        run: |
+          # no build machine paths in the binaries
+          export RUSTFLAGS="--remap-path-prefix=$PWD=/dwg-rs"
+          target=${{ matrix.target }}
+          export "CFLAGS_${target//-/_}=-ffile-prefix-map=$PWD=/dwg-rs"
+          cargo build --release --locked --offline --target "$target" -p dwg2gltf -p dwg2gltf-capi
+
+      - name: Smoke test
+        if: matrix.smoke
+        run: |
+          out=target/${{ matrix.target }}/release
+          $out/dwg2gltf tests/bricscad/dwg/v27/trim/trim_crossing/trim_crossing_AC1032.dwg -o crossing.glb
+          $out/gltf2dwg crossing.glb -o crossing.dwg
+          $out/dwg2gltf crossing.dwg -o roundtrip.glb
+
+      - name: Package
+        shell: bash
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          [ "$GITHUB_REF_TYPE" = tag ] || version=$(git rev-parse --short HEAD)
+          dir=dwg-rs-$version-${{ matrix.name }}
+          out=target/${{ matrix.target }}/release
+          mkdir -p "$dir/lib" "$dir/include"
+          case ${{ matrix.target }} in
+            *windows*) cp $out/dwg2gltf.exe $out/gltf2dwg.exe "$dir/"; cp $out/dwg2gltf.dll "$dir/lib/" ;;
+            *apple*) cp $out/dwg2gltf $out/gltf2dwg "$dir/"; cp $out/libdwg2gltf.dylib "$dir/lib/" ;;
+            *) cp $out/dwg2gltf $out/gltf2dwg "$dir/"; cp $out/libdwg2gltf.so "$dir/lib/" ;;
+          esac
+          cp include/dwg2gltf.h "$dir/include/"
+          cp LICENSE README.md CHANGELOG.md "$dir/"
+          mkdir dist
+          case ${{ matrix.target }} in
+            *windows*) zip -qr "dist/$dir.zip" "$dir" ;;
+            *) tar czf "dist/$dir.tar.gz" "$dir" ;;
+          esac
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist/*
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+          cat > notes.md <<'EOF'
+          Command line tools (`dwg2gltf`, `gltf2dwg`) and the C library (`dwg2gltf.dll`, `libdwg2gltf.so`, `libdwg2gltf.dylib`, with `include/dwg2gltf.h`) for Linux, Windows and macOS. Changes are in CHANGELOG.md.
+
+          The macOS binaries are not signed: after downloading, run `xattr -d com.apple.quarantine dwg2gltf gltf2dwg lib/libdwg2gltf.dylib`.
+          EOF
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft \
+            --title "dwg-rs $GITHUB_REF_NAME" --notes-file notes.md \
+            ./*.tar.gz ./*.zip SHA256SUMS
