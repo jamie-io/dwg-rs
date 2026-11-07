@@ -2,6 +2,9 @@
 
 ## 2026-11-07
 
+- Version 0.2.0
+- The three.js loader is prepared for npm as `@jamie-io/three-dwg-loader`
+- Release workflow: a tag v* builds the command line tools and the C library for Linux (x86_64, aarch64), Windows (x86_64) and macOS (arm64, x86_64) into a draft GitHub release
 - Demo site laid out like a CAD program: menus, toolbar, sample tree with the DWG versions, property grid, command line with the converter output and commands, cursor coordinates
 - Demo site: help texts rewritten in plain wording and moved into a Help dialog
 - Demo site redesigned: dimensions, feature edges, view presets and a units menu in the viewer; a panel with the converter's report and decoded LibreDWG warnings

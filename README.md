@@ -200,21 +200,23 @@ drawing takes about 300 KB.
 ## three.js loader
 
 ```sh
-rustup target add wasm32-wasip1   # once, plus wasi-sdk in ~/opt/wasi-sdk (or $WASI_SDK_PATH)
-scripts/build-wasm.sh             # -> packages/three-dwg-loader/wasm/dwg2gltf.wasm
+npm install @jamie-io/three-dwg-loader three
 ```
 
 ```js
-import { DWGLoader } from 'three-dwg-loader';
+import { DWGLoader } from '@jamie-io/three-dwg-loader';
 scene.add( await new DWGLoader().loadAsync( 'chair.dwg' ) );
 ```
 
 `packages/three-dwg-loader` is a three.js loader. It needs no change to
 three.js. The converter (`crates/dwg2gltf-wasm`, LibreDWG included) runs as
-WebAssembly in a worker and writes the same GLB as `dwg2gltf`. three's
+WebAssembly in a worker and converts like `dwg2gltf`; floating point
+can differ in the last digits, and with it the triangle count. three's
 `GLTFLoader` then builds the scene. Series DWGs become one object per
 article. `DWGExporter` writes three.js objects as DWG, with the `gltf2dwg`
-code. The module is about 1.3 MB with brotli. Conversion takes 1.3 to
+code. The module is about 1.5 MB with brotli. To build it from source:
+`rustup target add wasm32-wasip1`, wasi-sdk in `~/opt/wasi-sdk` (or
+`$WASI_SDK_PATH`), then `scripts/build-wasm.sh`. Conversion takes 1.3 to
 1.5 times as long as with the native tool. Options, errors, deployment and
 tests are in [its README](packages/three-dwg-loader/README.md). Like
 everything here, it is GPL-3.0-or-later.
