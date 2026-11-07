@@ -266,8 +266,10 @@ pub fn read_bytes(mut data: Vec<u8>, name: &str) -> Result<Drawing, DwgReadError
     let mut reader = Reader {
         dwg: &dwg.0,
         mapper_app: 0,
+        acad_app: 0,
     };
     reader.mapper_app = unsafe { reader.appid(mapper::APPID) };
+    reader.acad_app = unsafe { reader.appid("ACAD") };
     let mut drawing = unsafe { reader.drawing() };
     drawing.decode_error = error;
     Ok(drawing)
@@ -277,6 +279,9 @@ struct Reader<'a> {
     dwg: &'a sys::Dwg_Data,
     /// The APPID handle of the material mapper's XDATA (0: none).
     mapper_app: Handle,
+    /// The APPID handle of `ACAD`, whose `RTMaterial` XDATA holds the
+    /// material of entities in drawings before R2007 (0: none).
+    acad_app: Handle,
 }
 
 unsafe fn handle(r: sys::BITCODE_H) -> Handle {
@@ -289,6 +294,16 @@ unsafe fn handle(r: sys::BITCODE_H) -> Handle {
 
 fn p3(p: sys::BITCODE_3BD) -> Vec3 {
     [p.x, p.y, p.z]
+}
+
+/// The MATERIAL handle after an "RTMaterial" string in `ACAD` XDATA.
+fn rt_material(items: &[(u8, XValue)]) -> Option<Handle> {
+    items.windows(2).find_map(|w| match w {
+        [(0, XValue::Text(t)), (5, XValue::Handle(h))] if t.eq_ignore_ascii_case("RTMaterial") => {
+            Some(*h)
+        }
+        _ => None,
+    })
 }
 
 /// An XRECORD string: UTF-16 in R2007+ files, else bytes in the drawing's
@@ -341,8 +356,8 @@ impl Reader<'_> {
     }
 
     /// The XDATA items of the APPID `app` on an entity, as (raw EED code,
-    /// value): 70 int16, 71 int32, 10..15 points, 40..42 reals; others are
-    /// `XValue::Other`.
+    /// value): 0 strings, 5 handles, 70 int16, 71 int32, 10..15 points,
+    /// 40..42 reals; others are `XValue::Other`.
     unsafe fn eed(&self, e: &sys::Dwg_Object_Entity, app: Handle) -> Vec<(u8, XValue)> {
         let mut out = vec![];
         if app == 0 {
@@ -359,6 +374,22 @@ impl Reader<'_> {
             let u = unsafe { std::ptr::addr_of!((*data).u) }.cast::<u8>();
             let value = unsafe {
                 match code {
+                    // length, then 15 bits codepage and an is_tu bit, then
+                    // the characters (UTF-16 in R2007+ files)
+                    0 => {
+                        let n = std::ptr::read_unaligned(u.cast::<u16>()) as usize;
+                        let flags = std::ptr::read_unaligned(u.add(2).cast::<u16>());
+                        let chars = u.add(4);
+                        if flags & 0x8000 != 0 {
+                            let w: Vec<u16> = (0..n)
+                                .map(|i| std::ptr::read_unaligned(chars.cast::<u16>().add(i)))
+                                .collect();
+                            XValue::Text(String::from_utf16_lossy(&w))
+                        } else {
+                            XValue::Text(String::from_utf8_lossy(array(chars, n)).into_owned())
+                        }
+                    }
+                    5 => XValue::Handle(std::ptr::read_unaligned(u.cast::<u64>())),
                     70 => XValue::Int(std::ptr::read_unaligned(u.cast::<u16>()) as i16 as i64),
                     71 => XValue::Int(std::ptr::read_unaligned(u.cast::<u32>()) as i32 as i64),
                     10..=15 => XValue::Point(std::ptr::read_unaligned(u.cast::<[f64; 3]>())),
@@ -608,6 +639,12 @@ impl Reader<'_> {
             material_mapper: None,
             shape: Shape::Other,
         };
+        if ent.material_refs[0] == 0 && self.acad_app != 0 {
+            // before R2007 an entity's material is XDATA: "RTMaterial" and
+            // the MATERIAL's handle
+            let items = unsafe { self.eed(e, self.acad_app) };
+            ent.material_refs[0] = rt_material(&items).unwrap_or(0);
+        }
         if self.mapper_app != 0 {
             ent.material_mapper =
                 MaterialMapper::from_eed(&unsafe { self.eed(e, self.mapper_app) });
@@ -895,5 +932,24 @@ impl Reader<'_> {
             })
             .collect();
         Shape::Acis { data, wires }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rt_material_follows_its_tag() {
+        let text = |t: &str| (0, XValue::Text(t.into()));
+        assert_eq!(
+            rt_material(&[text("RTMaterial"), (5, XValue::Handle(0x9AC))]),
+            Some(0x9AC)
+        );
+        assert_eq!(
+            rt_material(&[text("other"), (5, XValue::Handle(1)), text("RTMaterial")]),
+            None
+        );
+        assert_eq!(rt_material(&[]), None);
     }
 }

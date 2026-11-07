@@ -2,6 +2,7 @@
 
 ## 2026-11-07
 
+- Materials in DWG R14 to 2004 files are read from their `RTMaterial` XDATA; such drawings came out untextured and white
 - Delphi viewer example: silhouette lines, order-independent x-ray, line widths and sizes that follow the DPI, snapping to arc midpoints and circle centers, drawings converted on a worker thread, themed controls
 
 ## 2026-11-06

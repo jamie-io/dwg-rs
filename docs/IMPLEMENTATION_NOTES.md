@@ -65,6 +65,10 @@ JSON quirks (all handled in the Python `libredwg.py` / `model.py`):
   ODA-written file seen shows this. `Document.material_ref` resolves the
   material by object type, so it keeps working with a fixed LibreDWG (master
   since 76cf0d750, which the Rust build vendors, section 11).
+- **Materials before R2007**: entities have no material handle; AutoCAD
+  stores it as XDATA of the APPID `ACAD`: 1000 `RTMaterial`, then 1005 the
+  MATERIAL's handle (also `ByBlock`/`ByLayer`). The reader uses it when the
+  entity has no material handle.
 - **MESH bug**: DXF 91 is the subdivision level, but LibreDWG reads it as
   the size of a vertex array, so every MESH with level > 0 decodes as
   garbage. Fixed upstream (PR #1435, in the vendored LibreDWG); the Python
