@@ -2,6 +2,11 @@
 
 ## 2026-11-07
 
+- Demo site redesigned: dimensions, feature edges, view presets and a units menu in the viewer; a panel with the converter's report and decoded LibreDWG warnings
+- Demo site: each test drawing in all seven DWG versions, with its mesh measured in the browser and checked against the right answer
+- Demo site: what is converted, what is left out and how it is tested, with the test report's counts filled in at build time
+- Demo site: round-trip samples (Khronos CC0 models written by gltf2dwg), compared with their source
+- BricsCAD corpus report refreshed for the current converter
 - ACI 7 ("white/black") is written black, the foreground color on a light background as in plots and OFML viewers; true color white stays white
 - Materials in DWG R14 to 2004 files are read from their `RTMaterial` XDATA; such drawings came out untextured and white
 - Texture images embedded on their own (EDWG_TEXTURE_DICT, without a material archive) are used; such materials came out untextured. Textures of AutoCAD materials without a material archive are projected in drawing units, as AutoCAD applies their transform (they were 1000x too large in millimeter drawings)

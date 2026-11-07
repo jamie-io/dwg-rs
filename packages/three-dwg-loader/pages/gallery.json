@@ -1,138 +1,194 @@
 {
-	"start": "trim_crossing_AC1032",
+	"start": "trim_crossing",
 	"groups": [
 		{
-			"title": "ACIS solids",
+			"title": "Solids and Boolean operations",
 			"items": [
 				{
-					"file": "trim/trim_crossing/trim_crossing_AC1032.dwg",
-					"title": "Crossing cylinders"
+					"shape": "trim/trim_crossing",
+					"title": "Crossing cylinders",
+					"about": "Union of two cylinders, r 20 mm, 100 mm long. The volume is 2πr²·100 − 16r³/3: their shared Steinmetz solid counts once."
 				},
 				{
-					"file": "trim/trim_cut_torus/trim_cut_torus_AC1032.dwg",
-					"title": "Cut torus"
+					"shape": "trim/trim_sphere_hole",
+					"title": "Sphere with a hole",
+					"about": "Sphere r 40 minus a cylinder r 10 along Z. What is left depends on the hole's height only: 4/3·π·(40² − 10²)^1.5."
 				},
 				{
-					"file": "trim/trim_cut_cone/trim_cut_cone_AC1032.dwg",
-					"title": "Cut cone"
+					"shape": "trim/trim_cylinder_hole_seam",
+					"title": "Hole across the seam",
+					"about": "Cylinder r 30 with a cross hole r 10 through the seam, the line where the cylinder's surface parameter wraps around."
 				},
 				{
-					"file": "trim/trim_cylinder_hole/trim_cylinder_hole_AC1032.dwg",
-					"title": "Cylinder with hole"
+					"shape": "trim/trim_cut_torus",
+					"title": "Half torus",
+					"about": "Torus R 60, r 15, cut in half by a box. Volume π²·60·15²."
 				},
 				{
-					"file": "primitive/torus/torus_AC1032.dwg",
-					"title": "Torus"
+					"shape": "trim/trim_cut_cone",
+					"title": "Truncated cone",
+					"about": "Cone r 40, 90 mm high, cut at 45 mm. Volume of the frustum π·45/3·(40² + 40·20 + 20²)."
 				},
 				{
-					"file": "primitive/cone/cone_AC1032.dwg",
-					"title": "Cone"
-				},
-				{
-					"file": "primitive/sphere/sphere_AC1032.dwg",
-					"title": "Sphere"
-				},
-				{
-					"file": "fillet/fillet_large/fillet_large_AC1032.dwg",
-					"title": "Filleted box"
-				},
-				{
-					"file": "fillet/fillet_cushion/fillet_cushion_AC1032.dwg",
-					"title": "Cushion"
-				},
-				{
-					"file": "loft/loft_three/loft_three_AC1032.dwg",
-					"title": "Loft, three sections"
-				},
-				{
-					"file": "loft/loft_circle_square/loft_circle_square_AC1032.dwg",
-					"title": "Loft, circle to square"
-				},
-				{
-					"file": "revolve/revolve_ring_360/revolve_ring_360_AC1032.dwg",
-					"title": "Revolved ring"
-				},
-				{
-					"file": "revolve/revolve_half_disc_180/revolve_half_disc_180_AC1032.dwg",
-					"title": "Revolved half disc"
-				},
-				{
-					"file": "sweep/sweep_circle_helix/sweep_circle_helix_AC1032.dwg",
-					"title": "Swept helix"
-				},
-				{
-					"file": "sweep/sweep_circle_spline/sweep_circle_spline_AC1032.dwg",
-					"title": "Swept spline"
-				},
-				{
-					"file": "tube/tube_270/tube_270_AC1032.dwg",
-					"title": "Tube, 270° bend"
-				},
-				{
-					"file": "tube/tube_hollow/tube_hollow_AC1032.dwg",
-					"title": "Hollow tube"
-				},
-				{
-					"file": "tube/tube_thick/tube_thick_AC1032.dwg",
-					"title": "Thick tube"
+					"shape": "inverted/inverted_cavity",
+					"title": "Box with a cavity",
+					"about": "A 60 mm cube minus a 20 mm cube inside it: two shells, the inner one facing into the hole."
 				}
 			]
 		},
 		{
-			"title": "Surfaces, regions and meshes",
+			"title": "Fillets, sweeps, lofts, revolutions",
 			"items": [
 				{
-					"file": "surface/surface_lofted/surface_lofted_AC1032.dwg",
-					"title": "Lofted surface"
+					"shape": "fillet/fillet_large",
+					"title": "Filleted box",
+					"about": "100 × 60 × 40 box with every edge rounded at r 15: rolling-ball blend faces."
 				},
 				{
-					"file": "surface/surface_revolved/surface_revolved_AC1032.dwg",
-					"title": "Revolved surface"
+					"shape": "fillet/fillet_cushion",
+					"title": "Cushion",
+					"about": "400 × 400 × 100 box with edges rounded at r 47, nearly half its thickness."
 				},
 				{
-					"file": "surface/surface_swept/surface_swept_AC1032.dwg",
-					"title": "Swept surface"
+					"shape": "sweep/sweep_circle_helix",
+					"title": "Spring",
+					"about": "Circle r 4 swept along a helix of radius 30 and height 120."
 				},
 				{
-					"file": "region/region_two_holes/region_two_holes_AC1032.dwg",
-					"title": "Region with holes"
+					"shape": "sweep/sweep_square_spline",
+					"title": "Square swept along a spline",
+					"about": "6 × 6 square swept along a 3D spline through four points."
 				},
 				{
-					"file": "sheet/sheet_wavy_mesh/sheet_wavy_mesh_AC1032.dwg",
-					"title": "Wavy mesh"
+					"shape": "loft/loft_circle_square",
+					"title": "Loft, circle to square",
+					"about": "From a circle r 30 to a 40 × 40 square 100 mm above it."
 				},
 				{
-					"file": "sheet/sheet_wavy_pface/sheet_wavy_pface_AC1032.dwg",
-					"title": "Wavy polyface mesh"
+					"shape": "loft/loft_three",
+					"title": "Loft through three circles",
+					"about": "Circles r 30, 15 and 25 at heights 0, 100 and 200."
+				},
+				{
+					"shape": "revolve/revolve_ring_120",
+					"title": "Ring, revolved 120°",
+					"about": "20 × 20 rectangle 50 mm off the Y axis, revolved 120° about it. Volume a third of 2π·60·20·20."
+				},
+				{
+					"shape": "tube/tube_hollow",
+					"title": "Hollow tube bend",
+					"about": "Ring r 12 / r 9 revolved 90° at radius 100."
+				},
+				{
+					"shape": "tube/tube_swept_bend",
+					"title": "Swept pipe",
+					"about": "Circle r 5 swept along a polyline: 100 mm straight, a 90° arc of r 50, then straight again."
 				}
 			]
 		},
 		{
-			"title": "Older DWG versions",
+			"title": "Surfaces and regions",
 			"items": [
 				{
-					"file": "trim/trim_sphere_hole/trim_sphere_hole_AC1014.dwg",
-					"title": "Sphere with hole"
+					"shape": "surface/surface_lofted",
+					"title": "Lofted surface",
+					"about": "Open surface lofted between two splines 80 mm apart. Open shapes have an area but no volume."
 				},
 				{
-					"file": "loft/loft_two/loft_two_AC1015.dwg",
-					"title": "Loft, two sections"
+					"shape": "surface/surface_swept",
+					"title": "Swept surface",
+					"about": "A 10 mm line swept along a 3D spline."
 				},
 				{
-					"file": "tube/tube_090/tube_090_AC1018.dwg",
-					"title": "Tube, 90° bend"
+					"shape": "surface/surface_revolved",
+					"title": "Revolved surface",
+					"about": "A slanted line revolved 180°: half the side of a truncated cone. Area π·(50 + 70)·√800 / 2."
 				},
 				{
-					"file": "trim/trim_cylinder_hole_seam/trim_cylinder_hole_seam_AC1021.dwg",
-					"title": "Cylinder, hole on seam"
+					"shape": "region/region_two_holes",
+					"title": "Region with two holes",
+					"about": "40 × 40 square minus two circles r 6. Area 1600 − 72π."
+				}
+			]
+		},
+		{
+			"title": "Polygon meshes",
+			"items": [
+				{
+					"shape": "sheet/sheet_wavy_mesh",
+					"title": "Wavy MESH",
+					"about": "Ten-cell MESH (SubD), the last three cells wound the other way. They are turned to match their neighbours. A MESH is drawn as its unsmoothed cage."
 				},
 				{
-					"file": "region/region_hole/region_hole_AC1024.dwg",
-					"title": "Region with hole"
+					"shape": "sheet/sheet_wavy_pface",
+					"title": "Wavy polyface mesh",
+					"about": "The same strip as a POLYLINE polyface mesh."
 				},
 				{
-					"file": "tube/tube_swept_bend/tube_swept_bend_AC1027.dwg",
-					"title": "Swept tube bend"
+					"shape": "sheet/sheet_wavy_3dface",
+					"title": "Wavy 3DFACEs",
+					"about": "The same strip as ten separate 3DFACE entities."
+				},
+				{
+					"shape": "sheet/closed_mesh",
+					"title": "Inside-out cube",
+					"about": "20 mm MESH cube with every face pointing inwards. The closed shell is turned outwards."
+				}
+			]
+		},
+		{
+			"title": "Block references",
+			"items": [
+				{
+					"shape": "inverted/inverted_mirror3d",
+					"title": "Mirrored wedge",
+					"about": "A WEDGE mirrored with MIRROR3D. A mirroring transform turns faces inside out unless the triangles are rewound."
+				},
+				{
+					"shape": "inverted/inverted_insert_xyz",
+					"title": "Block at scale −1, −1, −1",
+					"about": "A block INSERT with all three scale factors negative."
+				},
+				{
+					"shape": "inverted/inverted_nested_odd",
+					"title": "Mirror in a nested block",
+					"about": "A mirrored INSERT inside another block: one mirroring along the chain."
+				}
+			]
+		},
+		{
+			"title": "Size and position",
+			"items": [
+				{
+					"shape": "scale/scale_trim_far",
+					"title": "1000 km from the origin",
+					"about": "The sphere with a hole, moved 1 000 000 mm along each axis."
+				},
+				{
+					"shape": "scale/scale_tube_large",
+					"title": "Tube bend, 1 km radius",
+					"about": "A 90° tube bend scaled by 10 000."
+				},
+				{
+					"shape": "scale/scale_fillet_small",
+					"title": "Filleted box, 1 mm long",
+					"about": "The filleted box at 1/100 scale. Parts thinner than 1 mm are checked by their extents only: the converter's 0.1 mm chord tolerance makes their area and volume meaningless."
+				}
+			]
+		},
+		{
+			"title": "Written by gltf2dwg",
+			"note": "glTF files converted to DWG by this project's writer, then read back. They show the round trip, not how other programs write DWG.",
+			"items": [
+				{
+					"sample": "lantern",
+					"title": "Lantern",
+					"about": "Khronos glTF sample model (CC0, Microsoft)."
+				},
+				{
+					"sample": "water-bottle",
+					"title": "Water bottle",
+					"about": "Khronos glTF sample model (CC0, Microsoft)."
 				}
 			]
 		}
