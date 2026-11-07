@@ -185,6 +185,10 @@ pub struct MaterialDef {
     pub uv_matrix: [f64; 6],
     /// How to generate UVs for faces without stored ones.
     pub projection: Projection,
+    /// Whether the material comes with an OFML material archive, whose
+    /// projection is in meters; a plain AutoCAD material's transmatrix is in
+    /// drawing units.
+    pub ofml: bool,
     /// The OMATS block mapping parameters (`auto <triple> [<token>]`), from
     /// the archive or the modifiers in the material name (`...; auto xzx yz;
     /// rotate 0 0 90`), which win. Not used by the converter yet.
@@ -251,6 +255,7 @@ impl MaterialDef {
             texture: None,
             uv_matrix: UV_IDENTITY,
             projection: Projection::Box,
+            ofml: false,
             auto_mapping: None,
             normal: None,
             extras: Map::new(),
@@ -397,6 +402,8 @@ pub struct Document {
     materials: RefCell<HashMap<Handle, Option<Rc<MaterialDef>>>>,
     /// Embedded OFML material archives (zip files) by material name.
     archives: HashMap<String, Vec<u8>>,
+    /// Embedded texture images by lower-case file name.
+    textures: HashMap<String, Vec<u8>>,
     acds: HashMap<Handle, Vec<u8>>,
 }
 
@@ -433,13 +440,26 @@ impl Document {
             decode_error,
             materials: RefCell::default(),
             archives: HashMap::new(),
+            textures: HashMap::new(),
             acds: acis_streams(&acds),
         };
         doc.layers = doc.read_layers();
         doc.model_space = doc.objects.iter().position(
             |o| matches!(&o.data, Data::BlockHeader(b) if b.name.to_uppercase() == "*MODEL_SPACE"),
         );
-        doc.archives = doc.read_material_archives();
+        doc.archives = doc
+            .read_edwg_dict(ofml::MATERIAL_DICT)
+            .into_iter()
+            .filter(|(_, blob)| {
+                blob.starts_with(b"PK") && ZipArchive::new(Cursor::new(blob.as_slice())).is_ok()
+            })
+            .collect();
+        doc.textures = doc
+            .read_edwg_dict(ofml::TEXTURE_DICT)
+            .into_iter()
+            .filter(|(name, _)| image_mime(name).is_some())
+            .map(|(name, blob)| (basename(&name).to_lowercase(), blob))
+            .collect();
         doc
     }
 
@@ -684,11 +704,13 @@ impl Document {
         )
     }
 
-    /// OFML exports store each material as a zip (material.mat + textures) in
-    /// an XRECORD under the EDWG_MATERIAL_DICT dictionary, keyed by the
-    /// MATERIAL object's name.
-    fn read_material_archives(&self) -> HashMap<String, Vec<u8>> {
-        let mut packages = HashMap::new();
+    /// The XRECORDs (310 chunks) of the named object dictionary's entry `key`
+    /// (under PXCAD_DICT), by name. OFML exports store each material as a zip
+    /// (material.mat + textures) under EDWG_MATERIAL_DICT, keyed by the
+    /// MATERIAL object's name; some store the images on their own under
+    /// EDWG_TEXTURE_DICT, keyed by the file name the MATERIAL refers to.
+    fn read_edwg_dict(&self, key: &str) -> Vec<(String, Vec<u8>)> {
+        let mut blobs = vec![];
         for obj in &self.objects {
             let Data::Dictionary(items) = &obj.data else {
                 continue;
@@ -696,21 +718,20 @@ impl Document {
             if obj.kind != "DICTIONARY" {
                 continue;
             }
-            let Some(matdict) = lookup(items, ofml::MATERIAL_DICT).and_then(|h| self.get(h)) else {
+            let Some(dict) = lookup(items, key).and_then(|h| self.get(h)) else {
                 continue;
             };
-            let Data::Dictionary(materials) = &matdict.data else {
+            let Data::Dictionary(entries) = &dict.data else {
                 continue;
             };
-            for (name, h) in materials {
+            for (name, h) in entries {
                 let blob = self.get(*h).map(binary_chunks).unwrap_or_default();
-                if blob.starts_with(b"PK") && ZipArchive::new(Cursor::new(blob.as_slice())).is_ok()
-                {
-                    packages.insert(name.clone(), blob);
+                if !blob.is_empty() {
+                    blobs.push((name.clone(), blob));
                 }
             }
         }
-        packages
+        blobs
     }
 
     pub fn material(&self, handle: Option<Handle>) -> Option<Rc<MaterialDef>> {
@@ -767,6 +788,7 @@ impl Document {
         }
         if let Some(package) = package {
             apply_archive(&mut mat, package, &m.filename);
+            mat.ofml = true;
         }
         if mat.texture.is_none() && !m.filename.is_empty() {
             self.load_texture_file(&mut mat, &m.filename);
@@ -789,7 +811,9 @@ impl Document {
         if image_mime(&name).is_none() {
             return;
         }
-        if let Some(data) = (self.texture_files)(filename) {
+        if let Some(data) = self.textures.get(&name.to_lowercase()) {
+            mat.set_texture(data.clone(), &name);
+        } else if let Some(data) = (self.texture_files)(filename) {
             mat.set_texture(data, &name);
         }
     }

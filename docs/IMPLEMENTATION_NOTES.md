@@ -209,11 +209,17 @@ them. What the JSON hid:
     (`base; auto xzx yz; rotate 0 0 90`), which win. The word after the
     triple (`yz`, `z`, `xz`) is not in OMATS 2.2. The box
     projection does not use it yet.
+  - Embedded images without an archive: XRECORDs (310 chunks) under
+    `PXCAD_DICT → EDWG_TEXTURE_DICT`, keyed by the file name the MATERIAL's
+    `diffusemap.filename` gives (matched without case). They are used
+    before image files next to the drawing.
   - Derived materials have no material archive of their own. Their extension
     dictionary has `EDWG_BASE_MATERIAL` (340 → base MATERIAL); use the base's
     archive.
   - UVs: explicit UVs win; otherwise box (`auto`) or planar projection of
-    block-local coordinates in meters; then `v = 1 − v` for glTF; then the
+    block-local coordinates in meters (in drawing units for a material
+    without a material archive, whose transmatrix AutoCAD applies to drawing
+    units: 0.001 in a millimeter drawing is one repeat per meter); then `v = 1 − v` for glTF; then the
     material's 2×3 transform, as it goes into KHR_texture_transform:
     scale and offset as they are, the rotation conjugated by the flip
     (`u' = a·u − b·v + tx`, `v' = −c·u + d·v + ty`). Applying the transform
