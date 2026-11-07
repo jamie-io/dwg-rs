@@ -58,6 +58,10 @@ JSON quirks (all handled in the Python `libredwg.py` / `model.py`):
   the method: C2 = true color, C3 = ACI (low byte), C0 = ByLayer,
   C1 = ByBlock. `index` 256 = ByLayer, 0 = ByBlock. A color without `index`
   is ByBlock. Pre-R2004 files give a bare integer.
+- ACI 7 is the foreground color (white on dark, black on light backgrounds,
+  black when plotted). The converter writes it black, as OFML viewers on
+  their light background show it; true color 255,255,255 stays white, and a
+  material with its own diffuse color wins over both.
 - Layers: `flag0` bit 0 frozen, bit 1 off; negative color index also means off.
 - **Flag swap (R2007+)**: LibreDWG 0.14 reads the plot-style and material
   flag bits in swapped order. A flag value of 3 in `plotstyle_flags` comes

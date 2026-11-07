@@ -76,6 +76,11 @@ pub const UNIT_NAMES: [(&str, i32); 9] = [
 ];
 
 /// AutoCAD Color Index -> RGB.
+///
+/// ACI 7 is the foreground color: white on a dark background, black on a
+/// light one (paper, plots, renderings on white). glTF has no background, so
+/// it is black, which is how OFML viewers show it; a true color white
+/// (255,255,255) stays white.
 pub static ACI: LazyLock<[Rgb; 256]> = LazyLock::new(|| {
     let mut table = [[0u8; 3]; 256];
     let fixed: [Rgb; 9] = [
@@ -85,7 +90,7 @@ pub static ACI: LazyLock<[Rgb; 256]> = LazyLock::new(|| {
         [0, 255, 255],
         [0, 0, 255],
         [255, 0, 255],
-        [255, 255, 255],
+        [0, 0, 0],
         [65, 65, 65],
         [128, 128, 128],
     ];
@@ -129,9 +134,9 @@ pub fn rgb_unit(rgb: Rgb) -> [f64; 3] {
     rgb.map(|c| c as f64 / 255.0)
 }
 
-/// ByLayer, ByBlock or an RGB color. Layers resolve ByLayer/ByBlock to white.
+/// ByLayer, ByBlock or an RGB color. Layers resolve ByLayer/ByBlock to ACI 7.
 pub fn parse_color(color: Color, is_layer: bool) -> ColorRef {
-    let white = ColorRef::Rgb(ACI[7]);
+    let seven = ColorRef::Rgb(ACI[7]);
     if let Some(value) = color.rgb {
         let low = (value & 255) as usize;
         match value >> 24 {
@@ -144,13 +149,13 @@ pub fn parse_color(color: Color, is_layer: bool) -> ColorRef {
     }
     let Some(index) = color.index else {
         // stored as ByBlock (DXF 62 = 0)
-        return if is_layer { white } else { ColorRef::ByBlock };
+        return if is_layer { seven } else { ColorRef::ByBlock };
     };
     match index.unsigned_abs() {
         256 if !is_layer => ColorRef::ByLayer,
         0 if !is_layer => ColorRef::ByBlock,
         i @ 1..=255 => ColorRef::Rgb(ACI[i as usize]),
-        _ => white,
+        _ => seven,
     }
 }
 
@@ -1255,6 +1260,15 @@ mod tests {
         assert_eq!(
             parse_color(color(Some(256), None), true),
             ColorRef::Rgb(ACI[7])
+        );
+        // ACI 7 is the foreground color, black; true color white is not
+        assert_eq!(
+            parse_color(color(Some(7), None), false),
+            ColorRef::Rgb([0, 0, 0])
+        );
+        assert_eq!(
+            parse_color(color(None, Some(0xC2FF_FFFF)), false),
+            ColorRef::Rgb([255, 255, 255])
         );
         assert_eq!(ACI[11], [255, 127, 127]);
         assert_eq!(ACI[20], [255, 63, 0]);
