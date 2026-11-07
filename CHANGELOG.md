@@ -2,6 +2,8 @@
 
 ## 2026-11-07
 
+- Demo site laid out like a CAD program: menus, toolbar, sample tree with the DWG versions, property grid, command line with the converter output and commands, cursor coordinates
+- Demo site: help texts rewritten in plain wording and moved into a Help dialog
 - Demo site redesigned: dimensions, feature edges, view presets and a units menu in the viewer; a panel with the converter's report and decoded LibreDWG warnings
 - Demo site: each test drawing in all seven DWG versions, with its mesh measured in the browser and checked against the right answer
 - Demo site: what is converted, what is left out and how it is tested, with the test report's counts filled in at build time
