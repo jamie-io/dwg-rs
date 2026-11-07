@@ -1,12 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Jamie Jahn
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// The demo page: a three.js viewer for the DWGLoader (dwg2gltf compiled to
-// WebAssembly, run in a worker), the sample list (gallery.json, written by
-// build.mjs) and a panel with the converter's report. For the samples of the
-// test suite it measures the mesh like tests/bricscad/measure.py does and
-// compares it with the right answer.
-
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
@@ -21,7 +15,7 @@ const VERSIONS = {
 	AC1021: '2007', AC1024: '2010', AC1027: '2013', AC1032: '2018',
 };
 
-// LibreDWG's DWG_ERR_* bits below the critical ones (include/dwg.h)
+// DWG_ERR_* of libredwg/include/dwg.h, the recoverable ones
 const DECODE_ERRORS = [
 	[ 1, 'WRONGCRC', 'a checksum did not match' ],
 	[ 2, 'NOTYETSUPPORTED', 'data LibreDWG cannot decode yet' ],
@@ -32,7 +26,7 @@ const DECODE_ERRORS = [
 	[ 64, 'VALUEOUTOFBOUNDS', 'a value out of its range' ],
 ];
 
-// the tolerances of tests/bricscad/measure.py, in millimeters
+// tests/bricscad/measure.py, in mm
 const BOUNDS_MM = 0.2;
 const BOUNDS_OF_DIAGONAL = 1e-4;
 const SHARE = 0.01;
@@ -40,10 +34,9 @@ const DEVIATION_MM = 0.1;
 const FINE_MM = 10 * DEVIATION_MM;
 const FACING_SHARE = 0.999;
 
-// edges are left out above this, they take long and hide the shape
+// EdgesGeometry gets slow above this
 const EDGE_LIMIT = 400000;
 
-/** A DOM element: h( 'td', { className: 'n' }, 'text', child, ... ). */
 function h( tag, props = {}, ...children ) {
 
 	const el = document.createElement( tag );
@@ -70,7 +63,6 @@ function group( digits ) {
 
 }
 
-/** `value` with `decimals`, digits grouped in threes, a real minus sign. */
 function num( value, decimals = 0 ) {
 
 	const [ int, frac ] = Math.abs( value ).toFixed( decimals ).split( '.' );
@@ -78,7 +70,6 @@ function num( value, decimals = 0 ) {
 
 }
 
-/** Decimals that show about four significant digits of `mm`, at most 3. */
 function decimalsFor( mm ) {
 
 	const a = Math.abs( mm );
@@ -86,7 +77,6 @@ function decimalsFor( mm ) {
 
 }
 
-/** A length given in millimeters: mm up to 100 m, meters beyond. */
 function length( mm, { unit = true, decimals } = {} ) {
 
 	if ( Math.abs( mm ) >= 100000 ) return num( mm / 1000, decimals ?? 1 ) + ( unit ? ' m' : '' );
@@ -94,7 +84,7 @@ function length( mm, { unit = true, decimals } = {} ) {
 
 }
 
-/** The same for the dimensions drawn on the model (osifont has no thin spaces). */
+// osifont has no thin spaces
 function dimText( mm ) {
 
 	const whole = Math.abs( mm ) >= 10 && Math.abs( mm - Math.round( mm ) ) < 0.05;
@@ -102,7 +92,6 @@ function dimText( mm ) {
 
 }
 
-/** Lengths in millimeters in one unit, joined with `sep`: mm, or m when the largest is 100 m or more. */
 function lengths( values, sep = ' × ' ) {
 
 	const largest = Math.max( ...values.map( Math.abs ) );
@@ -125,7 +114,6 @@ function bytes( n ) {
 
 }
 
-/** "a", "a and b", "a, b and c". */
 function list( items ) {
 
 	return items.length < 2 ? items.join( '' ) : `${items.slice( 0, - 1 ).join( ', ' )} and ${items.at( - 1 )}`;
@@ -181,7 +169,6 @@ const dims = new THREE.Group();
 dims.name = 'dimensions';
 scene.add( dims );
 
-// the UCS icon: DWG's axes (X, Y, Z up) in the corner, turning with the view
 const triad = { scene: new THREE.Scene(), camera: new THREE.OrthographicCamera( - 1.6, 1.6, 1.6, - 1.6, 0.1, 10 ), size: 84 };
 
 function axisLabel( text, color ) {
@@ -203,7 +190,7 @@ function axisLabel( text, color ) {
 function buildTriad() {
 
 	triad.scene.clear();
-	// glTF is Y-up: DWG X is +x, DWG Y is -z, DWG Z is +y
+	// DWG X, Y, Z are glTF +x, -z, +y
 	for ( const [ text, dir, color ] of [
 		[ 'X', new THREE.Vector3( 1, 0, 0 ), '#c0362c' ],
 		[ 'Y', new THREE.Vector3( 0, 0, - 1 ), '#2b8a3e' ],
@@ -250,7 +237,6 @@ renderer.setAnimationLoop( () => {
 	renderer.clear();
 	renderer.render( scene, camera );
 	labels.render( scene, camera );
-	// the axes, bottom left, on top
 	viewDirection.subVectors( camera.position, controls.target ).normalize();
 	triad.camera.position.copy( viewDirection ).multiplyScalar( 4 );
 	triad.camera.up.copy( camera.up );
@@ -262,16 +248,13 @@ renderer.setAnimationLoop( () => {
 } );
 
 const VIEWS = {
-	// AutoCAD's south-east isometric: from +X, -Y, +Z of the drawing
+	// AutoCAD's SE isometric
 	iso: new THREE.Vector3( 1, 1, 1 ),
 	top: new THREE.Vector3( 0, 1, 1e-4 ),
 	front: new THREE.Vector3( 0, 0, 1 ),
 	right: new THREE.Vector3( 1, 0, 0 ),
 };
 
-let view = 'iso';
-
-/** Point `cam` at `object` from `direction`; returns the bounding box. */
 function frame( object, cam, ctrl, direction = VIEWS.iso ) {
 
 	const box = new THREE.Box3().setFromObject( object );
@@ -291,14 +274,6 @@ function frame( object, cam, ctrl, direction = VIEWS.iso ) {
 
 }
 
-function frameCurrent() {
-
-	if ( ! current?.object ) return;
-	frame( current.object, camera, controls, VIEWS[ view ] );
-	for ( const b of document.querySelectorAll( '[data-view]' ) ) b.setAttribute( 'aria-pressed', String( b.dataset.view === view ) );
-
-}
-
 function dispose( object ) {
 
 	object.traverse( ( o ) => {
@@ -315,7 +290,6 @@ function dispose( object ) {
 
 }
 
-/** A nice grid step (1, 2 or 5 times a power of ten) near `size / 6`. */
 function gridStep( size ) {
 
 	const raw = size / 6;
@@ -360,7 +334,6 @@ const edgeCache = new WeakMap();
 const darkEdges = new THREE.LineBasicMaterial( { color: 0x1d2226, transparent: true, opacity: 0.55 } );
 const lightEdges = new THREE.LineBasicMaterial( { color: 0xb7c0c7, transparent: true, opacity: 0.8 } );
 
-/** Edges that show on `material`: light ones on dark, untextured surfaces. */
 function edgeMaterialFor( material ) {
 
 	const m = [ material ].flat()[ 0 ];
@@ -381,7 +354,7 @@ function setEdges( object, on ) {
 			let geometry = edgeCache.get( o.geometry );
 			if ( ! geometry ) {
 
-				// 40°: box and hole edges, not the steps of a coarsely tessellated blend
+				// 40°: not the steps of a coarsely tessellated blend
 				geometry = new THREE.EdgesGeometry( o.geometry, 40 );
 				edgeCache.set( o.geometry, geometry );
 
@@ -420,12 +393,7 @@ function setWireframe( object, on ) {
 
 const dimMaterial = new THREE.LineBasicMaterial( { color: DIM, depthTest: false, transparent: true } );
 
-/**
- * The overall dimensions of `box` (world, Y-up, meters) drawn like a CAD
- * dimension: extension lines, a dimension line with oblique ticks, the text.
- * X along the front, the drawing's Y along the right side, Z up the front left
- * edge, offset outwards. `sizes` are the lengths in millimeters, by DWG axis.
- */
+/** `sizes`: mm, by DWG axis. */
 function drawDimensions( box, sizes ) {
 
 	for ( const child of [ ...dims.children ] ) {
@@ -446,7 +414,6 @@ function drawDimensions( box, sizes ) {
 	const V = ( x, y, z ) => new THREE.Vector3( x, y, z );
 	const segment = ( a, b ) => points.push( a, b );
 
-	/** One dimension from `a` to `b` (on the box), pushed out along `out`; ticks lean towards `lean`. */
 	const draw = ( a, b, out, lean, text ) => {
 
 		const a2 = a.clone().addScaledVector( out, off );
@@ -477,11 +444,7 @@ function drawDimensions( box, sizes ) {
 
 // -- measuring ------------------------------------------------------------
 
-/**
- * Area, signed volume, bounds and facing of the triangles of `object`, in
- * world space (meters, Y-up), like tests/bricscad/glb.py: mirrored
- * instances are rewound. `axis` (world) collects the area facing it.
- */
+/** Like tests/bricscad/glb.py: mirrored instances are rewound. */
 function measure( object, axis = null ) {
 
 	object.updateWorldMatrix( true, true );
@@ -525,7 +488,7 @@ function measure( object, axis = null ) {
 
 }
 
-/** World (Y-up, meters) bounds as DWG bounds (Z-up) in millimeters. */
+/** DWG bounds (Z-up, mm) of a world box (Y-up, m). */
 function dwgBounds( box ) {
 
 	return [
@@ -541,10 +504,7 @@ function extents( bounds ) {
 
 }
 
-/**
- * The checks of tests/bricscad/measure.py for one conversion: rows for the
- * panel and whether everything is within its tolerance.
- */
+/** The checks of tests/bricscad/measure.py. */
 function checkAgainst( expected, m, report ) {
 
 	const bounds = dwgBounds( m.box );
@@ -620,7 +580,6 @@ function checkAgainst( expected, m, report ) {
 
 }
 
-/** The facing axis of `expected` in world space (DWG Z-up to glTF Y-up). */
 function worldAxis( expected ) {
 
 	if ( ! Array.isArray( expected?.facing ) ) return null;
@@ -629,29 +588,37 @@ function worldAxis( expected ) {
 
 }
 
-// -- converting ---------------------------------------------------------
+// -- state --------------------------------------------------------------
 
 const loader = new DWGLoader().preload();
 
-/** What is shown: { name, data, textures, item, version, units, object, result, report, measured } */
 let current = null;
 let site = { facts: {}, groups: [] };
 let gallery = [];
-let wireframe = false;
-let edges = true;
-let showDims = true;
-let lines = true;
+const opened = [];
+const toggles = { edges: true, wire: false, dims: true, lines: true };
+let view = 'iso';
 let busy = 0;
 let converted = 0;
 
-function setStatus( text, kind = 'working' ) {
+// -- command line ---------------------------------------------------------
 
-	const el = $( 'busy' );
-	el.textContent = text ?? '';
-	el.className = `status ${kind}`;
-	el.classList.toggle( 'hidden', ! text );
+const log = $( 'log' );
+
+function print( text, kind = '' ) {
+
+	log.append( kind ? h( 'span', { className: kind }, text ) : text, '\n' );
+	log.scrollTop = log.scrollHeight;
 
 }
+
+function setState( text ) {
+
+	$( 'state' ).textContent = text ?? '';
+
+}
+
+// -- converting -----------------------------------------------------------
 
 /** The DWG version from the file header ("AC1032"), or null. */
 function versionOf( data ) {
@@ -661,22 +628,21 @@ function versionOf( data ) {
 
 }
 
-/** Why `data` is not a DWG, in a sentence; null when it looks like one. */
 function notDwg( data ) {
 
 	if ( versionOf( data ) ) return null;
 	const head = new TextDecoder( 'latin1' ).decode( new Uint8Array( data, 0, Math.min( 32, data.byteLength ) ) );
-	if ( /^AutoCAD Binary DXF/.test( head ) || /^\s*0\s*\r?\n\s*SECTION/.test( head ) ) return 'This is a DXF file. dwg-rs reads DWG only: save the drawing as DWG.';
-	if ( /^PK/.test( head ) ) return 'This is a zip archive, not a DWG. Unpack it and open the DWG inside.';
+	if ( /^AutoCAD Binary DXF/.test( head ) || /^\s*0\s*\r?\n\s*SECTION/.test( head ) ) return 'This is a DXF file. dwg-rs reads DWG only.';
+	if ( /^PK/.test( head ) ) return 'This is a zip archive, not a DWG.';
 	const shown = head.slice( 0, 6 ).replace( /[^\x20-\x7e]/g, '.' );
-	return `This is not a DWG file: DWG files start with “AC1…”, this one with “${shown}”.`;
+	return `Not a DWG file: DWG files start with "AC1", this one with "${shown}".`;
 
 }
 
 function versionName( version ) {
 
 	if ( ! version ) return 'unknown';
-	return VERSIONS[ version ] ? `${version}, AutoCAD ${VERSIONS[ version ]} format` : version;
+	return VERSIONS[ version ] ? `${version} (AutoCAD ${VERSIONS[ version ]})` : version;
 
 }
 
@@ -684,32 +650,31 @@ async function show( entry ) {
 
 	const ticket = ++ busy;
 	const { name, data, textures } = entry;
+	const version = versionOf( data );
+	print( `Opening ${name}: ${versionName( version )}, ${bytes( data.byteLength )}${entry.units ? `, units ${entry.units}` : ''}` );
+	if ( entry.unitsNote ) print( entry.unitsNote );
 	const why = notDwg( data );
 	if ( why ) {
 
-		setStatus( why, 'error' );
-		renderError( entry, why, '', false );
+		fail( entry, why );
 		return;
 
 	}
 
-	setStatus( converted === 0 ? `Loading the converter (${site.facts.wasmGzip ?? 'a few MB'}, once) and converting ${name}…` : `Converting ${name}…` );
+	setState( converted === 0 ? `Loading the converter (${site.facts.wasmGzip ?? 'a few MB'}) and converting…` : 'Converting…' );
 	$( 'empty' ).classList.add( 'hidden' );
-	for ( const id of [ 'download', 'copy' ] ) if ( $( id ) ) $( id ).disabled = true;
 	const t0 = performance.now();
 	let object, result;
 	try {
 
-		result = await loader.convert( data, { name, lines, units: entry.units || null, textures: textures ?? false } );
+		result = await loader.convert( data, { name, lines: toggles.lines, units: entry.units || null, textures: textures ?? false } );
 		object = await buildObject( result, name );
 
 	} catch ( e ) {
 
 		if ( ticket !== busy ) return;
 		console.warn( e );
-		const message = e.code ? `Conversion failed (${e.code}): ${e.message}` : `Conversion failed: ${e.message ?? e}`;
-		setStatus( message, 'error' );
-		renderError( entry, message, e.report?.summary ?? e.stderr ?? '' );
+		fail( entry, e.code ? `Conversion failed (${e.code}): ${e.message}` : `Conversion failed: ${e.message ?? e}`, e.report?.summary ?? e.stderr ?? '' );
 		return;
 
 	}
@@ -731,21 +696,62 @@ async function show( entry ) {
 
 	const expected = entry.item?.versions?.find( ( v ) => v.version === entry.version )?.expected ?? null;
 	const measured = measure( object, worldAxis( expected ) );
-	// center the drawing: coordinates far from the origin lose precision on the GPU
-	const center = measured.box.getCenter( new THREE.Vector3() );
+	// far from the origin, float32 on the GPU jitters
+	const center = measured.box.isEmpty() ? new THREE.Vector3() : measured.box.getCenter( new THREE.Vector3() );
 	object.position.sub( center );
 	const shown = measured.box.clone().translate( center.clone().negate() );
 
-	current = { ...entry, object, result, report: result.report, measured, expected, totalMs: performance.now() - t0 };
-	setWireframe( object, wireframe );
-	if ( edges && measured.triangles <= EDGE_LIMIT ) setEdges( object, true );
+	current = { ...entry, object, result, report: result.report, measured, expected, center, error: null, totalMs: performance.now() - t0 };
+	setWireframe( object, toggles.wire );
+	if ( toggles.edges && measured.triangles <= EDGE_LIMIT ) setEdges( object, true );
 	scene.add( object );
 	placeGrid( shown );
 	drawDimensions( shown, extents( dwgBounds( measured.box ) ) );
-	dims.visible = showDims;
+	dims.visible = toggles.dims;
 	frameCurrent();
-	setStatus( null );
-	renderReport();
+	$( 'glbButton' ).disabled = false;
+	setState( `${name}: ${num( measured.triangles )} triangles` );
+
+	for ( const line of ( result.report.summary ?? '' ).split( '\n' ) ) {
+
+		print( line, line.startsWith( 'warning' ) ? 'warn' : '' );
+		const note = line.startsWith( 'warning' ) ? explain( line ) : null;
+		if ( note ) print( `  ${note}` );
+
+	}
+
+	if ( result.report.missingTextures?.length ) print( `texture images not found: ${result.report.missingTextures.join( ', ' )}. Open them together with the DWG.`, 'warn' );
+	if ( expected ) {
+
+		const check = checkAgainst( expected, measured, result.report );
+		print( `Check: ${verdict( check )}`, check.ok ? 'ok' : 'bad' );
+
+	}
+
+	print( `${num( result.convertMs ?? 0 )} ms in WebAssembly, ${num( current.totalMs )} ms until shown.` );
+	renderProps();
+
+}
+
+function fail( entry, message, summary = '' ) {
+
+	if ( current?.object ) {
+
+		scene.remove( current.object );
+		dispose( current.object );
+		drawDimensions( new THREE.Box3(), [] );
+		placeGrid( new THREE.Box3() );
+
+	}
+
+	current = { ...entry, object: null, result: null, report: null, measured: null, expected: null, error: message };
+	$( 'empty' ).classList.remove( 'hidden' );
+	$( 'empty' ).textContent = 'Nothing to show for this file.';
+	$( 'glbButton' ).disabled = true;
+	print( message, 'bad' );
+	if ( summary ) print( summary );
+	setState( message );
+	renderProps();
 
 }
 
@@ -790,219 +796,152 @@ async function buildObject( result, name ) {
 
 }
 
-// -- the panel ------------------------------------------------------------
-
-function field( label, value, wide = false ) {
-
-	return h( 'div', { className: wide ? 'wide' : '' }, h( 'dt', {}, label ), h( 'dd', {}, value ) );
-
-}
-
-function titleBlock( entry, extra = [] ) {
-
-	const version = versionOf( entry.data );
-	const fields = [
-		h( 'div', { className: 'wide' },
-			h( 'dt', {}, entry.item ? entry.item.title : 'Your drawing' ),
-			h( 'dd', { className: 'drawing' }, entry.name ),
-		),
-		field( 'DWG format', versionName( version ), true ),
-	];
-	if ( entry.item?.versions?.length > 1 ) {
-
-		const row = h( 'div', { className: 'versions', role: 'group', 'aria-label': 'Saved by BricsCAD as' } );
-		for ( const v of entry.item.versions ) {
-
-			const b = h( 'button', { type: 'button', textContent: VERSIONS[ v.version ] ?? v.version, title: `${v.version}: AutoCAD ${VERSIONS[ v.version ] ?? '?'} format` } );
-			b.setAttribute( 'aria-pressed', String( v.version === entry.version ) );
-			b.addEventListener( 'click', () => openSample( entry.item, v.version ) );
-			row.append( b );
-
-		}
-
-		fields.push( h( 'div', { className: 'wide' }, h( 'dt', {}, 'The same shape, saved by BricsCAD as' ), row ) );
-
-	}
-
-	fields.push( field( 'File size', bytes( entry.data.byteLength ) ) );
-	fields.push( field( 'Units', entry.units ? `${entry.units} (set here)` : 'the drawing’s own' ) );
-	return h( 'dl', { className: 'titleblock' }, fields, extra );
-
-}
-
-function renderError( entry, message, summary = '', reportable = true ) {
-
-	if ( current?.object ) {
-
-		scene.remove( current.object );
-		dispose( current.object );
-		drawDimensions( new THREE.Box3(), [] );
-		placeGrid( new THREE.Box3() );
-
-	}
-
-	current = { ...entry, object: null, result: null };
-	$( 'empty' ).classList.remove( 'hidden' );
-	$( 'empty' ).textContent = 'Nothing to show for this file.';
-	const panel = $( 'inspector' );
-	panel.replaceChildren( ...[
-		titleBlock( entry ),
-		h( 'p', { className: 'verdict bad' }, message ),
-		summary ? h( 'h3', {}, 'Converter output' ) : null,
-		summary ? h( 'pre', { className: 'summary' }, summary ) : null,
-		reportable ? h( 'p', { className: 'muted' }, 'If your CAD program opens this file, please ',
-			h( 'a', { href: issueUrl( entry, message + ( summary ? '\n' + summary : '' ) ), target: '_blank', rel: 'noopener' }, 'report it' ),
-			'. The form opens on GitHub with this message filled in; nothing is sent until you submit it.' ) : null,
-	].filter( Boolean ) );
-
-}
-
-function renderReport() {
-
-	const { report, result, measured } = current;
-	const stats = report.stats ?? {};
-	const bounds = dwgBounds( measured.box );
-	const sizes = extents( bounds );
-	const glbBytes = result.blocks.reduce( ( s, b ) => s + b.glb.byteLength, 0 );
-
-	const block = titleBlock( current, [
-		field( 'Extents X × Y × Z', measured.box.isEmpty() ? '—' : lengths( sizes ), true ),
-		field( 'Lower corner', measured.box.isEmpty() ? '—' : lengths( bounds[ 0 ], ', ' ), true ),
-		field( 'Triangles', num( measured.triangles ) ),
-		field( 'Line segments', num( measured.segments ) ),
-		field( 'Block instances', num( stats.instances ?? 0 ) ),
-		field( 'GLB size', bytes( glbBytes ) ),
-		field( 'Converted in', `${num( result.convertMs ?? 0 )} ms` ),
-		field( 'Shown after', `${num( current.totalMs )} ms` ),
-	] );
-
-	const panel = $( 'inspector' );
-	panel.replaceChildren( block );
-	if ( current.unitsNote ) panel.append( h( 'p', { className: 'verdict note' }, current.unitsNote ) );
-
-	// what the converter did, entity by entity
-	const rows = [];
-	for ( const [ type, n ] of Object.entries( stats.converted ?? {} ) ) rows.push( [ type, 'converted', n ] );
-	for ( const [ type, n ] of Object.entries( stats.skipped ?? {} ) ) rows.push( [ type, 'skipped', n ] );
-	for ( const [ what, n ] of Object.entries( stats.repaired ?? {} ) ) rows.push( [ what, 'repaired', n ] );
-	panel.append( h( 'h3', {}, 'Entities' ) );
-	if ( rows.length === 0 ) {
-
-		panel.append( h( 'p', { className: 'muted' }, 'Nothing in model space was converted.' ) );
-
-	} else {
-
-		panel.append( h( 'table', {},
-			h( 'thead', {}, h( 'tr', {}, h( 'th', {}, 'Entity' ), h( 'th', {}, '' ), h( 'th', { className: 'n' }, 'Count' ) ) ),
-			h( 'tbody', {}, rows.map( ( [ type, what, n ] ) => h( 'tr', {},
-				h( 'td', {}, what === 'repaired' ? type : h( 'code', {}, type ) ),
-				h( 'td', { className: what === 'skipped' ? 'fail' : what === 'repaired' ? '' : 'pass' }, what ),
-				h( 'td', { className: 'n' }, num( n ) ),
-			) ) ),
-		) );
-
-	}
-
-	const warnings = ( stats.warnings ?? [] ).map( ( w ) => typeof w === 'string' ? w : JSON.stringify( w ) );
-	if ( report.missingTextures?.length ) warnings.push( `texture images not found: ${report.missingTextures.join( ', ' )}. Open them together with the DWG.` );
-	if ( warnings.length ) {
-
-		panel.append( h( 'h3', {}, plural( warnings.length, 'warning' ) ) );
-		panel.append( h( 'ul', { className: 'warnings' }, warnings.map( ( w ) => h( 'li', {}, w, explain( w ) ) ) ) );
-
-	}
-
-	if ( current.expected ) panel.append( renderCheck() );
-	if ( current.item?.source ) panel.append( renderRoundTrip() );
-
-	panel.append( h( 'h3', {}, 'Converter summary' ), h( 'pre', { className: 'summary' }, report.summary ?? '' ) );
-	const download = h( 'button', { type: 'button', id: 'download', textContent: result.blocks.length > 1 ? `Download ${result.blocks.length} GLB files` : 'Download GLB' } );
-	download.addEventListener( 'click', downloadGlb );
-	const copy = h( 'button', { type: 'button', id: 'copy', textContent: 'Copy summary' } );
-	copy.addEventListener( 'click', async () => {
-
-		try {
-
-			await navigator.clipboard.writeText( summaryText( current ) );
-			copy.textContent = 'Copied';
-
-		} catch {
-
-			copy.textContent = 'Copy failed';
-
-		}
-
-		setTimeout( () => copy.textContent = 'Copy summary', 1600 );
-
-	} );
-	panel.append(
-		h( 'div', { className: 'buttons' }, download, copy,
-			h( 'a', { href: issueUrl( current, summaryText( current ) ), target: '_blank', rel: 'noopener', textContent: 'Report a problem' } ) ),
-		h( 'p', { className: 'muted' }, 'Report a problem opens a GitHub issue form with the summary filled in. Nothing is sent until you submit it, and the DWG is not attached.' ),
-	);
-
-}
-
-/** A line of explanation under a warning, or null. */
 function explain( warning ) {
 
 	const bits = /recoverable decode errors \(0x([0-9a-f]+)\)/i.exec( warning );
 	if ( bits ) {
 
 		const value = parseInt( bits[ 1 ], 16 );
-		const names = DECODE_ERRORS.filter( ( [ bit ] ) => value & bit ).map( ( [ , name, text ] ) => `${name} (${text})` );
+		const names = DECODE_ERRORS.filter( ( [ bit ] ) => value & bit ).map( ( [ , name ] ) => name );
 		const facts = site.facts;
 		const suite = current?.item?.versions && facts.decodeWarnings
-			? ` The test suite has this on ${facts.decodeWarnings} of its ${facts.corpusFiles} files, and their geometry still matches.`
+			? ` ${facts.decodeWarnings} of the ${facts.corpusFiles} test files have this; their geometry matches.`
 			: ' Check the result for missing parts.';
-		return h( 'small', {}, `LibreDWG skipped what it could not read: ${names.join( ', ' ) || 'unknown bits'}.${suite}` );
+		return `0x${bits[ 1 ]}: ${names.join( ', ' ) || 'unknown bits'}.${suite}`;
 
 	}
 
-	if ( /no units \(INSUNITS 0\)/.test( warning ) ) return h( 'small', {}, 'If it comes out 1000 times too large, it was drawn in millimeters: pick mm under Units.' );
-	if ( /less than 1 cm across/.test( warning ) ) return h( 'small', {}, 'On this page, the Units menu does what --units does on the command line.' );
-	if ( /paper space/.test( warning ) ) return h( 'small', {}, 'Layouts are not converted, only model space.' );
+	if ( /no units \(INSUNITS 0\)/.test( warning ) ) return 'If it is 1000 times too large, it was drawn in millimeters: UNITS mm.';
+	if ( /less than 1 cm across/.test( warning ) ) return 'On this page: UNITS m, or the Units list.';
 	return null;
 
 }
 
-function renderCheck() {
+function verdict( check ) {
 
-	const { rows, ok, fine, skipped } = checkAgainst( current.expected, current.measured, current.report );
-	const section = h( 'div', {} );
-	section.append( h( 'h3', {}, 'Check against the right answer' ) );
-	section.append( h( 'p', { className: 'muted' }, 'Measured here, on the triangles you see, with the tolerances of the test suite. The right answers come from a formula where one exists, otherwise from BricsCAD.' ) );
-	section.append( h( 'table', {},
-		h( 'thead', {}, h( 'tr', {}, h( 'th', {}, '' ), h( 'th', {}, 'Right answer' ), h( 'th', {}, 'Measured' ), h( 'th', { className: 'n' }, 'Off by' ) ) ),
-		h( 'tbody', {}, rows.map( ( r ) => h( 'tr', {},
-			h( 'td', {}, r.what ),
-			h( 'td', {}, r.expected ),
-			h( 'td', { className: r.skippedCheck ? '' : r.pass ? 'pass' : 'fail' }, r.measured ),
-			h( 'td', { className: 'n', title: r.allowed ? `allowed: ${r.allowed}` : '' }, r.off, r.allowed && r.off ? h( 'br' ) : null, r.allowed && r.off ? h( 'small', { className: 'muted' }, r.allowed === 'not checked' ? 'not checked' : `${r.allowed} allowed` ) : null ),
-		) ) ),
-	) );
-	let text;
-	if ( skipped.length ) text = `Entities were skipped: ${skipped.map( ( [ k, n ] ) => `${k} ${n}` ).join( ', ' )}.`;
-	else if ( ok && fine ) text = 'Thinner than 1 mm: only the extents count, and they match. At 0.1 mm chord tolerance, area and volume of so thin a part mean little.';
-	else if ( ok ) text = 'Matches the right answer within the test suite’s tolerances.';
-	else text = 'Does not match the right answer. This is a bug; the report of the test suite should list it too.';
-	section.append( h( 'p', { className: ok ? 'verdict' : 'verdict bad' }, text ) );
-	return section;
+	if ( check.skipped.length ) return `entities skipped: ${check.skipped.map( ( [ k, n ] ) => `${k} ${n}` ).join( ', ' )}`;
+	const failed = check.rows.filter( ( r ) => ! r.pass ).map( ( r ) => r.what.toLowerCase() );
+	if ( failed.length ) return `out of tolerance: ${list( failed )}`;
+	const offs = check.rows.filter( ( r ) => r.off && ! r.skippedCheck ).map( ( r ) => `${r.what.toLowerCase()} ${r.off.replace( ' at most', '' )}` );
+	return `${check.fine ? 'extents within tolerance (thinner than 1 mm: area and volume not checked)' : 'within tolerance'}${offs.length ? ` (${offs.join( ', ' )})` : ''}`;
 
 }
 
-function renderRoundTrip() {
+// -- properties -----------------------------------------------------------
+
+function row( name, value, className = '' ) {
+
+	return h( 'tr', {}, h( 'th', { scope: 'row' }, name ), h( 'td', { className }, value ) );
+
+}
+
+function category( name, rows ) {
+
+	return h( 'tbody', {}, h( 'tr', { className: 'cat' }, h( 'th', { colSpan: 2, scope: 'rowgroup' }, name ) ), rows );
+
+}
+
+function renderProps() {
+
+	const panel = $( 'props' );
+	if ( ! current ) {
+
+		panel.replaceChildren( h( 'p', { className: 'none' }, 'Nothing selected.' ) );
+		return;
+
+	}
+
+	const { item, report, measured, result } = current;
+	const general = [ row( 'Name', current.name ) ];
+	if ( item ) general.push( row( 'Sample', item.title ), row( 'Description', item.about ) );
+	general.push( row( 'Source', item?.source ? 'gltf2dwg (round trip)' : item ? 'BricsCAD V27, tests/bricscad' : 'your file, not uploaded' ) );
+	general.push( row( 'Format', versionName( versionOf( current.data ) ) ) );
+	general.push( row( 'File size', bytes( current.data.byteLength ) ) );
+	general.push( row( 'Units', current.units ? `${current.units} (set)` : 'from drawing' ) );
+	const sections = [ category( 'General', general ) ];
+
+	if ( current.error ) {
+
+		sections.push( category( 'Error', [ row( 'Message', current.error, 'fail' ) ] ) );
+		panel.replaceChildren( h( 'table', { className: 'props' }, sections ) );
+		return;
+
+	}
+
+	const stats = report.stats ?? {};
+	const bounds = dwgBounds( measured.box );
+	const empty = measured.box.isEmpty();
+	sections.push( category( 'Geometry', [
+		row( 'Size X, Y, Z', empty ? '—' : lengths( extents( bounds ), ', ' ) ),
+		row( 'Extents min', empty ? '—' : lengths( bounds[ 0 ], ', ' ) ),
+		row( 'Extents max', empty ? '—' : lengths( bounds[ 1 ], ', ' ) ),
+		row( 'Triangles', num( measured.triangles ) ),
+		row( 'Line segments', num( measured.segments ) ),
+		row( 'Block instances', num( stats.instances ?? 0 ) ),
+	] ) );
+
+	const conversion = [];
+	for ( const [ type, n ] of Object.entries( stats.converted ?? {} ) ) conversion.push( row( `Converted ${type}`, num( n ) ) );
+	for ( const [ type, n ] of Object.entries( stats.skipped ?? {} ) ) conversion.push( row( `Skipped ${type}`, num( n ), 'fail' ) );
+	for ( const [ what, n ] of Object.entries( stats.repaired ?? {} ) ) conversion.push( row( `Repaired: ${what}`, num( n ) ) );
+	if ( conversion.length === 0 ) conversion.push( row( 'Converted', 'nothing in model space' ) );
+	conversion.push(
+		row( 'GLB size', bytes( result.blocks.reduce( ( s, b ) => s + b.glb.byteLength, 0 ) ) ),
+		row( 'Time', `${num( result.convertMs ?? 0 )} ms in WebAssembly` ),
+	);
+	sections.push( category( 'Conversion', conversion ) );
+
+	if ( current.expected ) sections.push( checkSection() );
+	if ( item?.source ) sections.push( roundTripSection() );
+
+	const warnings = ( stats.warnings ?? [] ).map( ( w ) => typeof w === 'string' ? w : JSON.stringify( w ) );
+	if ( warnings.length ) {
+
+		sections.push( category( 'Warnings', warnings.flatMap( ( w, i ) => {
+
+			const note = explain( w );
+			return [ row( String( i + 1 ), w ), note ? row( '', note ) : null ];
+
+		} ).filter( Boolean ) ) );
+
+	}
+
+	panel.replaceChildren( h( 'table', { className: 'props' }, sections ) );
+
+}
+
+function checkSection() {
+
+	const check = checkAgainst( current.expected, current.measured, current.report );
+	const rows = [];
+	for ( const r of check.rows ) {
+
+		const className = r.skippedCheck ? '' : r.pass ? 'pass' : 'fail';
+		if ( r.what === 'Faces' ) {
+
+			rows.push( row( 'Faces', `${r.measured}${r.allowed ? `, limit ${r.allowed}` : ''}`, className ) );
+			continue;
+
+		}
+
+		rows.push( row( `${r.what} expected`, r.expected ), row( `${r.what} measured`, r.measured ) );
+		rows.push( row( `${r.what} off by`, `${r.off.replace( ' at most', '' )}, ${r.skippedCheck ? 'not checked' : `limit ${r.allowed}`}`, className ) );
+
+	}
+
+	rows.push( row( 'Result', verdict( check ), check.ok ? 'pass' : 'fail' ) );
+	return category( 'Check (tests/bricscad/measure.py)', rows );
+
+}
+
+function roundTripSection() {
 
 	const source = current.item.source;
 	const m = current.measured;
-	const section = h( 'div', {} );
 	const [ slo, shi ] = source.bounds;
-	// both are glTF (Y-up); shown in the drawing's X, Y, Z like the title block
-	const srcSize = [ 0, 2, 1 ].map( ( k ) => ( shi[ k ] - slo[ k ] ) * 1000 );
-	const size = [ 'x', 'z', 'y' ].map( ( k ) => ( m.box.max[ k ] - m.box.min[ k ] ) * 1000 );
 	const off = Math.max( ...[ 0, 1, 2 ].flatMap( ( k ) => [ Math.abs( m.box.min.getComponent( k ) - slo[ k ] ), Math.abs( m.box.max.getComponent( k ) - shi[ k ] ) ] ) ) * 1000;
-	const share = ( m.area - source.area ) / source.area;
 	const kept = new Set();
+	let factors = '';
 	current.object.traverse( ( o ) => {
 
 		for ( const mat of [ o.material ].flat().filter( Boolean ) ) {
@@ -1012,83 +951,36 @@ function renderRoundTrip() {
 			if ( mat.roughnessMap || mat.metalnessMap ) kept.add( 'metallic-roughness' );
 			if ( mat.aoMap ) kept.add( 'occlusion' );
 			if ( mat.emissiveMap ) kept.add( 'emissive' );
+			if ( ! factors && o.isMesh ) factors = `metalness ${num( mat.metalness, 2 )}, roughness ${num( mat.roughness, 2 )}`;
 
 		}
 
 	} );
 	const had = [ ...new Set( source.materials.flatMap( ( mat ) => mat.maps ) ) ];
 	const lost = had.filter( ( x ) => ! kept.has( x ) );
-	const factors = [];
-	current.object.traverse( ( o ) => {
-
-		if ( o.isMesh && o.material && ! factors.length ) factors.push( `metalness ${num( o.material.metalness, 2 )}, roughness ${num( o.material.roughness, 2 )}` );
-
-	} );
-
-	section.append(
-		h( 'h3', {}, 'Compared with the source glTF' ),
-		h( 'p', { className: 'muted' }, h( 'a', { href: source.source }, `Khronos ${source.title}` ), ` (${source.license}, ${source.author}), images ${source.images}. Written by ${source.writer}.` ),
-		h( 'table', {},
-			h( 'thead', {}, h( 'tr', {}, h( 'th', {}, '' ), h( 'th', {}, 'Source' ), h( 'th', {}, 'Read back' ), h( 'th', { className: 'n' }, 'Off by' ) ) ),
-			h( 'tbody', {},
-				h( 'tr', {}, h( 'td', {}, 'Triangles' ), h( 'td', {}, num( source.triangles ) ), h( 'td', {}, num( m.triangles ) ), h( 'td', { className: 'n' }, num( m.triangles - source.triangles ) ) ),
-				h( 'tr', {}, h( 'td', {}, 'Area' ), h( 'td', {}, `${num( source.area, 3 )} m²` ), h( 'td', {}, `${num( m.area, 3 )} m²` ), h( 'td', { className: 'n' }, percent( share, 4 ) ) ),
-				h( 'tr', {}, h( 'td', {}, 'Extents' ), h( 'td', {}, lengths( srcSize ) ), h( 'td', {}, lengths( size ) ), h( 'td', { className: 'n' }, length( off, { decimals: 3 } ) ) ),
-			),
-		),
-		h( 'p', { className: lost.length ? 'verdict note' : 'verdict' },
-			lost.length
-				? `Lost on the way: the ${list( lost )} ${lost.length === 1 ? 'map' : 'maps'}. gltf2dwg writes one texture per material, the base color, and the base color, metallic and roughness factors; here ${factors[ 0 ] ?? 'unknown'}.`
-				: 'All texture maps of the source came back.' ),
-	);
-	return section;
+	return category( 'Round trip', [
+		row( 'Source', h( 'a', { href: source.source, target: '_blank', rel: 'noopener' }, `Khronos ${source.title}` ) ),
+		row( 'License', `${source.license}, ${source.author}` ),
+		row( 'Images', source.images ),
+		row( 'Written by', source.writer ),
+		row( 'Triangles', `${num( m.triangles )}, source ${num( source.triangles )}`, m.triangles === source.triangles ? 'pass' : 'fail' ),
+		row( 'Area', `${num( m.area, 3 )} m², source ${num( source.area, 3 )}; ${percent( ( m.area - source.area ) / source.area, 4 )}` ),
+		row( 'Extents', `${length( off, { decimals: 3 } )} off` ),
+		row( 'Maps kept', kept.size ? list( [ ...kept ] ) : 'none' ),
+		row( 'Maps lost', lost.length ? list( lost ) : 'none', lost.length ? 'fail' : '' ),
+		row( 'Factors', `${factors} (gltf2dwg writes one texture per material, the base color)` ),
+	] );
 
 }
 
-function summaryText( entry ) {
-
-	const facts = site.facts;
-	return [
-		`dwg-rs ${facts.commit ?? '?'} (WebAssembly, ${location.origin}${location.pathname})`,
-		`File: ${entry.name}, ${versionName( versionOf( entry.data ) )}, ${bytes( entry.data.byteLength )}`,
-		`Options: units ${entry.units || 'as drawn'}, lines ${lines ? 'on' : 'off'}`,
-		'',
-		entry.report?.summary ?? '',
-	].join( '\n' );
-
-}
-
-function issueUrl( entry, text ) {
-
-	const body = `${text.slice( 0, 4000 )}\n\nWhat looks wrong:\n\n`;
-	return `https://github.com/jamie-io/dwg-rs/issues/new?title=${encodeURIComponent( `Conversion of ${entry.name}` )}&body=${encodeURIComponent( body )}`;
-
-}
-
-function downloadGlb() {
-
-	if ( ! current?.result ) return;
-	const stem = current.name.replace( /\.dwg$/i, '' );
-	for ( const { name, glb } of current.result.blocks ) {
-
-		const a = document.createElement( 'a' );
-		a.href = URL.createObjectURL( new Blob( [ glb ], { type: 'model/gltf-binary' } ) );
-		a.download = ( current.result.blocks.length > 1 ? `${stem}-${name}` : stem ) + '.glb';
-		a.click();
-		setTimeout( () => URL.revokeObjectURL( a.href ), 1000 );
-
-	}
-
-}
-
-// -- files and samples --------------------------------------------------
+// -- files and samples ----------------------------------------------------
 
 async function openFiles( files ) {
 
 	const dwg = files.find( ( f ) => /\.dwg$/i.test( f.name ) ) ?? ( files.length === 1 ? files[ 0 ] : null );
 	if ( ! dwg ) {
 
-		setStatus( 'Choose a file ending in .dwg; texture images may come along with it.', 'error' );
+		print( 'Choose a .dwg file; texture images may come along with it.', 'bad' );
 		return;
 
 	}
@@ -1096,9 +988,14 @@ async function openFiles( files ) {
 	const images = files.filter( ( f ) => f !== dwg && /\.(png|jpe?g)$/i.test( f.name ) );
 	const textures = images.length ? {} : null;
 	for ( const f of images ) textures[ f.name ] = await f.arrayBuffer();
-	markCurrent( null );
+	if ( images.length ) print( `with ${plural( images.length, 'texture image' )}: ${images.map( ( f ) => f.name ).join( ', ' )}` );
 	if ( location.hash ) history.replaceState( null, '', location.pathname + location.search );
-	show( { name: dwg.name, data: await dwg.arrayBuffer(), textures, units: $( 'units' ).value } );
+	const entry = { name: dwg.name, data: await dwg.arrayBuffer(), textures, units: $( 'units' ).value };
+	opened.unshift( entry );
+	opened.splice( 5 );
+	renderTree();
+	markCurrent( null, null, entry );
+	show( entry );
 
 }
 
@@ -1114,17 +1011,17 @@ let autoUnits = false;
 
 async function openSample( item, version = item.default, { keepHash = false } = {} ) {
 
-	markCurrent( item.id );
 	const v = item.versions.find( ( x ) => x.version === version ) ?? item.versions.at( - 1 );
+	markCurrent( item.id, v.version );
 	if ( ! keepHash ) history.replaceState( null, '', `#${item.id}${v.version !== item.default ? '/' + v.version : ''}` );
-	// R14 cannot store units: the test suite converts it as millimeters
+	// R14 has no INSUNITS; measure.py converts it as mm too
 	let units = $( 'units' ).value;
 	let unitsNote = null;
 	if ( v.version === 'AC1014' && item.versions.length > 1 && ( units === '' || autoUnits ) ) {
 
 		units = 'mm';
 		autoUnits = true;
-		unitsNote = 'R14 drawings cannot store their units, so this one would come out 1000 times too large. It is converted as millimeters, as the test suite does.';
+		unitsNote = 'R14 has no units field; converted as mm, like the test suite.';
 
 	} else if ( autoUnits ) {
 
@@ -1134,8 +1031,6 @@ async function openSample( item, version = item.default, { keepHash = false } = 
 	}
 
 	$( 'units' ).value = units;
-	const name = v.file.split( '/' ).pop();
-	setStatus( `Loading ${name}…` );
 	let data;
 	try {
 
@@ -1143,18 +1038,138 @@ async function openSample( item, version = item.default, { keepHash = false } = 
 
 	} catch ( e ) {
 
-		setStatus( `Cannot load the sample: ${e.message}`, 'error' );
+		print( `Cannot load the sample: ${e.message}`, 'bad' );
 		return;
 
 	}
 
-	await show( { name, data, textures: null, item, version: v.version, units, unitsNote } );
+	await show( { name: v.file.split( '/' ).pop(), data, textures: null, item, version: v.version, units, unitsNote } );
 
 }
 
-function markCurrent( id ) {
+function findSample( words ) {
 
-	for ( const row of document.querySelectorAll( '.sample' ) ) row.setAttribute( 'aria-current', String( row.dataset.id === id ) );
+	const q = words.toLowerCase();
+	return gallery.find( ( i ) => i.id.toLowerCase() === q ) ?? gallery.find( ( i ) => i.title.toLowerCase().startsWith( q ) ) ?? gallery.find( ( i ) => i.id.toLowerCase().includes( q ) || i.title.toLowerCase().includes( q ) );
+
+}
+
+function parseVersion( text ) {
+
+	const t = text.toUpperCase();
+	if ( VERSIONS[ t ] ) return t;
+	return Object.keys( VERSIONS ).find( ( k ) => VERSIONS[ k ] === t ) ?? null;
+
+}
+
+// -- the sample tree --------------------------------------------------------
+
+function treeNode( label, { icon = null, className = '', expanded = null, onClick, dataset = {} } ) {
+
+	const button = h( 'button', { type: 'button', className, dataset },
+		h( 'span', { className: 'twisty', 'aria-hidden': 'true' }, expanded === null ? '' : expanded ? '▼' : '▶' ),
+		icon, h( 'span', {}, label ) );
+	button.addEventListener( 'click', onClick );
+	const li = h( 'li', { role: 'treeitem' }, button );
+	if ( expanded !== null ) li.setAttribute( 'aria-expanded', String( expanded ) );
+	return li;
+
+}
+
+function setExpanded( li, on ) {
+
+	li.setAttribute( 'aria-expanded', String( on ) );
+	li.querySelector( ':scope > button > .twisty' ).textContent = on ? '▼' : '▶';
+	li.querySelector( ':scope > ul' )?.classList.toggle( 'hidden', ! on );
+
+}
+
+function renderTree() {
+
+	const tree = $( 'tree' );
+	tree.replaceChildren();
+	const groups = [];
+	if ( opened.length ) groups.push( { title: 'Opened files', files: opened } );
+	groups.push( ...site.groups );
+	for ( const group of groups ) {
+
+		const li = treeNode( group.title, { className: 'group', expanded: true, onClick: () => setExpanded( li, li.getAttribute( 'aria-expanded' ) !== 'true' ) } );
+		li.classList.add( 'group' );
+		if ( group.note ) li.title = group.note;
+		const ul = h( 'ul', { role: 'group' } );
+		for ( const entry of group.files ?? [] ) {
+
+			ul.append( treeNode( entry.name, { icon: h( 'span', { className: 'icon' } ), dataset: { file: entry.name }, onClick: () => {
+
+				run( `OPEN ${entry.name}`, { echo: true, quiet: true } );
+				markCurrent( null, null, entry );
+				show( entry );
+
+			} } ) );
+
+		}
+
+		for ( const item of group.items ?? [] ) {
+
+			const icon = item.thumb ? h( 'img', { src: item.thumb, alt: '', loading: 'lazy', width: 18, height: 18 } ) : h( 'span', { className: 'icon' } );
+			const versions = item.versions.length > 1;
+			const node = treeNode( item.title, { icon, expanded: versions ? false : null, dataset: { id: item.id }, onClick: ( e ) => {
+
+				if ( versions && e.target.classList.contains( 'twisty' ) ) {
+
+					setExpanded( node, node.getAttribute( 'aria-expanded' ) !== 'true' );
+					return;
+
+				}
+
+				run( `SAMPLE ${item.id}` );
+
+			} } );
+			node.title = item.about;
+			if ( versions ) {
+
+				const sub = h( 'ul', { role: 'group', className: 'hidden' } );
+				for ( const v of item.versions ) {
+
+					sub.append( treeNode( `${VERSIONS[ v.version ] ?? v.version} (${v.version})`, { className: 'version', dataset: { id: item.id, version: v.version }, onClick: () => run( `SAMPLE ${item.id} ${VERSIONS[ v.version ] ?? v.version}` ) } ) );
+
+				}
+
+				node.append( sub );
+
+			}
+
+			ul.append( node );
+
+		}
+
+		li.append( ul );
+		tree.append( li );
+
+	}
+
+	if ( current?.item ) markCurrent( current.item.id, current.version );
+
+}
+
+function markCurrent( id, version, file = null ) {
+
+	for ( const b of document.querySelectorAll( '.tree button' ) ) {
+
+		let on = false;
+		if ( file ) on = b.dataset.file === file.name;
+		else if ( b.dataset.version ) on = b.dataset.id === id && b.dataset.version === version;
+		else if ( b.dataset.id ) on = b.dataset.id === id && ! b.parentElement.querySelector( '[data-version]' );
+		b.setAttribute( 'aria-current', String( on ) );
+
+	}
+
+	if ( id ) {
+
+		const node = document.querySelector( `.tree li[aria-expanded] > button[data-id="${CSS.escape( id )}"]` )?.parentElement;
+		if ( node ) setExpanded( node, true );
+
+	}
 
 }
 
@@ -1166,36 +1181,22 @@ async function loadGallery() {
 
 	} catch ( e ) {
 
-		$( 'gallery' ).textContent = `The sample list is missing (${e.message}).`;
+		print( `The sample list is missing (${e.message}).`, 'bad' );
 		return;
 
 	}
 
-	const root = $( 'gallery' );
-	root.replaceChildren();
-	for ( const group of site.groups ) {
-
-		const section = h( 'section', { className: 'group' }, h( 'h3', {}, group.title ), group.note ? h( 'p', {}, group.note ) : null );
-		for ( const item of group.items ) {
-
-			gallery.push( item );
-			const row = h( 'button', { type: 'button', className: 'sample', dataset: { id: item.id }, title: item.title },
-				item.thumb ? h( 'img', { src: item.thumb, alt: '', loading: 'lazy', width: 44, height: 44 } ) : h( 'i', { className: 'nothumb' } ),
-				h( 'div', {}, h( 'b', {}, item.title ), h( 'span', {}, item.about ) ),
-			);
-			row.addEventListener( 'click', () => openSample( item ) );
-			section.append( row );
-
-		}
-
-		root.append( section );
-
-	}
-
-	// #limits and the like keep their place; #build (the thumbnail pass) wants nothing loaded
+	gallery = site.groups.flatMap( ( g ) => g.items );
+	renderTree();
+	print( `dwg-rs ${site.facts.commit ?? ''} (WebAssembly, ${site.facts.wasmGzip ?? ''}), LibreDWG ${site.facts.libredwg ?? ''}. Files are converted in this tab; nothing is uploaded.` );
+	print( 'Drop a DWG on the drawing area or type OPEN. HELP lists the commands.' );
+	const [ id ] = decodeURIComponent( location.hash.slice( 1 ) ).split( '/' );
+	if ( HELP_TOPICS.includes( id ) ) openHelp( id );
+	// #build: the thumbnail pass
 	if ( ! openFromHash() && location.hash !== '#build' ) {
 
-		openSample( gallery.find( ( i ) => i.id === site.start ) ?? gallery[ 0 ], undefined, { keepHash: Boolean( location.hash ) } );
+		const start = gallery.find( ( i ) => i.id === site.start ) ?? gallery[ 0 ];
+		run( `SAMPLE ${start.id}`, { keepHash: Boolean( location.hash ) } );
 
 	}
 
@@ -1206,20 +1207,389 @@ function openFromHash() {
 	const [ id, version ] = decodeURIComponent( location.hash.slice( 1 ) ).split( '/' );
 	const item = gallery.find( ( i ) => i.id === id );
 	if ( ! item ) return false;
-	openSample( item, version || item.default );
+	run( `SAMPLE ${item.id}${version ? ' ' + ( VERSIONS[ version ] ?? version ) : ''}`, { keepHash: true } );
 	return true;
 
 }
 
-// -- controls -----------------------------------------------------------
+// -- commands -------------------------------------------------------------
 
-$( 'open' ).addEventListener( 'click', () => $( 'files' ).click() );
+const HELP_TOPICS = [ 'entities', 'limits', 'tests', 'usage', 'license', 'credits' ];
+
+const COMMANDS = {
+	OPEN: 'open a DWG file (with its texture images)',
+	SAMPLE: 'SAMPLE name [version]: open a sample, e.g. SAMPLE spring 2004',
+	VERSION: 'VERSION R14|2000|2004|2007|2010|2013|2018: the same sample, saved as another version',
+	UNITS: 'UNITS mm|cm|m|in|ft|drawing: convert again in these units',
+	ZOOM: 'zoom to the extents (F)',
+	'ISO, TOP, FRONT, RIGHT': 'view direction',
+	'EDGES, WIRE, DIMS, LINES': 'switch edges (E), triangles (W), dimensions (D), lines and curves [ON|OFF]',
+	CHECK: 'compare the shown sample with its expected values',
+	GLB: 'save the converted glTF binary',
+	COPY: 'copy the converter summary',
+	REPORT: 'open a GitHub issue form with the summary',
+	'HELP [topic]': `this list, or a help topic: ${HELP_TOPICS.join( ', ' )}`,
+	CLEAR: 'clear this window',
+};
+
+function syncToggles() {
+
+	for ( const el of document.querySelectorAll( '[data-toggle]' ) ) {
+
+		const on = String( toggles[ el.dataset.toggle ] );
+		el.setAttribute( el.getAttribute( 'role' ) === 'menuitem' ? 'aria-checked' : 'aria-pressed', on );
+
+	}
+
+	for ( const el of document.querySelectorAll( '[data-view]' ) ) el.setAttribute( 'aria-pressed', String( el.dataset.view === view ) );
+
+}
+
+function setToggle( name, value ) {
+
+	toggles[ name ] = value;
+	syncToggles();
+	if ( name === 'wire' && current?.object ) setWireframe( current.object, value );
+	if ( name === 'edges' && current?.object && ( ! value || current.measured.triangles <= EDGE_LIMIT ) ) setEdges( current.object, value );
+	if ( name === 'dims' ) dims.visible = value;
+	if ( name === 'lines' && current?.data && ! current.error ) show( current );
+
+}
+
+function frameCurrent() {
+
+	syncToggles();
+	if ( current?.object ) frame( current.object, camera, controls, VIEWS[ view ] );
+
+}
+
+function run( line, { echo = true, keepHash = false, quiet = false } = {} ) {
+
+	const words = line.trim().split( /\s+/ ).filter( Boolean );
+	if ( words.length === 0 ) return;
+	const verb = words[ 0 ].toUpperCase();
+	const rest = words.slice( 1 );
+	if ( echo ) print( `Command: ${line.trim()}`, 'in' );
+	if ( quiet ) return;
+	const onOff = ( name ) => {
+
+		const arg = ( rest[ 0 ] ?? '' ).toUpperCase();
+		setToggle( name, arg === 'ON' ? true : arg === 'OFF' ? false : ! toggles[ name ] );
+
+	};
+
+	switch ( verb ) {
+
+		case 'OPEN': $( 'files' ).click(); break;
+		case 'Z': case 'ZOOM': case 'FIT': frameCurrent(); break;
+		case 'ISO': case 'TOP': case 'FRONT': case 'RIGHT':
+			view = verb.toLowerCase();
+			frameCurrent();
+			break;
+		case 'VIEW': {
+
+			const name = ( rest[ 0 ] ?? '' ).toLowerCase().replace( /^se/, 'iso' );
+			if ( VIEWS[ name ] ) {
+
+				view = name;
+				frameCurrent();
+
+			} else print( 'VIEW iso|top|front|right' );
+			break;
+
+		}
+
+		case 'EDGES': onOff( 'edges' ); break;
+		case 'WIRE': case 'TRIANGLES': onOff( 'wire' ); break;
+		case 'DIMS': case 'DIMENSIONS': onOff( 'dims' ); break;
+		case 'LINES': onOff( 'lines' ); break;
+		case 'UNITS': {
+
+			const u = ( rest[ 0 ] ?? '' ).toLowerCase();
+			const value = u === 'drawing' || u === 'auto' ? '' : u;
+			if ( ! [ ...$( 'units' ).options ].some( ( o ) => o.value === value ) || rest.length === 0 ) {
+
+				print( `Units: ${$( 'units' ).value || 'from drawing'}. UNITS mm|cm|m|in|ft|drawing` );
+				break;
+
+			}
+
+			$( 'units' ).value = value;
+			autoUnits = false;
+			if ( current?.data ) show( { ...current, units: value, unitsNote: null } );
+			break;
+
+		}
+
+		case 'SAMPLE': {
+
+			const versionWord = rest.length > 1 ? parseVersion( rest.at( - 1 ) ) : null;
+			const item = findSample( ( versionWord ? rest.slice( 0, - 1 ) : rest ).join( ' ' ) );
+			if ( ! item ) {
+
+				print( rest.length ? `No sample "${rest.join( ' ' )}".` : 'SAMPLE name [version]' );
+				break;
+
+			}
+
+			if ( versionWord && ! item.versions.some( ( v ) => v.version === versionWord ) ) print( `${item.title} has no ${VERSIONS[ versionWord ] ?? versionWord} version.` );
+			openSample( item, versionWord ?? item.default, { keepHash } );
+			break;
+
+		}
+
+		case 'VERSION': {
+
+			const v = parseVersion( rest[ 0 ] ?? '' );
+			if ( ! current?.item || current.item.versions.length < 2 ) print( 'Only the test samples come in several versions.' );
+			else if ( ! v || ! current.item.versions.some( ( x ) => x.version === v ) ) print( `VERSION ${current.item.versions.map( ( x ) => VERSIONS[ x.version ] ).join( '|' )}` );
+			else openSample( current.item, v );
+			break;
+
+		}
+
+		case 'CHECK': {
+
+			if ( ! current?.expected ) {
+
+				print( 'No expected values: only the test samples have them.' );
+				break;
+
+			}
+
+			const check = checkAgainst( current.expected, current.measured, current.report );
+			for ( const r of check.rows ) print( `  ${r.what.padEnd( 8 )} ${r.measured}${r.expected ? `  expected ${r.expected}` : ''}${r.off ? `  ${r.off}` : ''}${r.allowed ? `  limit ${r.allowed}` : ''}`, r.skippedCheck ? '' : r.pass ? 'ok' : 'bad' );
+			print( `Check: ${verdict( check )}`, check.ok ? 'ok' : 'bad' );
+			break;
+
+		}
+
+		case 'GLB': case 'SAVEAS': case 'EXPORT':
+			if ( current?.result ) downloadGlb();
+			else print( 'Nothing to save.' );
+			break;
+		case 'COPY':
+			if ( ! current?.report ) {
+
+				print( 'Nothing converted yet.' );
+				break;
+
+			}
+
+			navigator.clipboard.writeText( summaryText( current ) ).then( () => print( 'Copied.' ), () => print( 'Copying failed.', 'bad' ) );
+			break;
+		case 'REPORT':
+			window.open( issueUrl( current ), '_blank', 'noopener' );
+			print( 'Opened a GitHub issue form with the summary. Nothing is sent until you submit it; the DWG is not attached.' );
+			break;
+		case 'HELP': case '?': {
+
+			const topic = ( rest[ 0 ] ?? '' ).toLowerCase();
+			if ( HELP_TOPICS.includes( topic ) ) {
+
+				openHelp( topic );
+				break;
+
+			}
+
+			for ( const [ name, text ] of Object.entries( COMMANDS ) ) print( `  ${name.padEnd( 24 )} ${text}` );
+			break;
+
+		}
+
+		case 'CLEAR': case 'CLS': log.replaceChildren(); break;
+		default: print( `Unknown command "${words[ 0 ]}". HELP lists the commands.` );
+
+	}
+
+}
+
+function summaryText( entry ) {
+
+	const facts = site.facts;
+	return [
+		`dwg-rs ${facts.commit ?? '?'} (WebAssembly, ${location.origin}${location.pathname})`,
+		`File: ${entry.name}, ${versionName( versionOf( entry.data ) )}, ${bytes( entry.data.byteLength )}`,
+		`Options: units ${entry.units || 'from drawing'}, lines ${toggles.lines ? 'on' : 'off'}`,
+		'',
+		entry.report?.summary ?? entry.error ?? '',
+	].join( '\n' );
+
+}
+
+function issueUrl( entry ) {
+
+	const text = entry ? summaryText( entry ) : `dwg-rs ${site.facts.commit ?? '?'} (WebAssembly)`;
+	const body = `${text.slice( 0, 4000 )}\n\nWhat looks wrong:\n\n`;
+	const title = entry ? `Conversion of ${entry.name}` : 'Demo page';
+	return `https://github.com/jamie-io/dwg-rs/issues/new?title=${encodeURIComponent( title )}&body=${encodeURIComponent( body )}`;
+
+}
+
+function downloadGlb() {
+
+	const stem = current.name.replace( /\.dwg$/i, '' );
+	for ( const { name, glb } of current.result.blocks ) {
+
+		const a = document.createElement( 'a' );
+		a.href = URL.createObjectURL( new Blob( [ glb ], { type: 'model/gltf-binary' } ) );
+		a.download = ( current.result.blocks.length > 1 ? `${stem}-${name}` : stem ) + '.glb';
+		a.click();
+		setTimeout( () => URL.revokeObjectURL( a.href ), 1000 );
+		print( `Saved ${a.download}.` );
+
+	}
+
+}
+
+// -- help -------------------------------------------------------------------
+
+const help = $( 'help' );
+
+function openHelp( topic ) {
+
+	if ( ! help.open ) help.showModal();
+	$( topic )?.scrollIntoView( { block: 'start' } );
+
+}
+
+$( 'helpClose' ).addEventListener( 'click', () => help.close() );
+help.addEventListener( 'close', () => {
+
+	const [ id ] = decodeURIComponent( location.hash.slice( 1 ) ).split( '/' );
+	if ( HELP_TOPICS.includes( id ) ) history.replaceState( null, '', location.pathname + location.search );
+
+} );
+
+// -- menus, toolbar, keys -------------------------------------------------
+
+function closeMenus( except = null ) {
+
+	for ( const menu of document.querySelectorAll( '.menu' ) ) {
+
+		if ( menu === except ) continue;
+		menu.querySelector( '[role="menu"]' ).classList.add( 'hidden' );
+		menu.querySelector( ':scope > button' ).setAttribute( 'aria-expanded', 'false' );
+
+	}
+
+}
+
+for ( const menu of document.querySelectorAll( '.menu' ) ) {
+
+	const button = menu.querySelector( ':scope > button' );
+	const list = menu.querySelector( '[role="menu"]' );
+	const openMenu = () => {
+
+		closeMenus( menu );
+		list.classList.remove( 'hidden' );
+		button.setAttribute( 'aria-expanded', 'true' );
+
+	};
+
+	button.addEventListener( 'click', () => list.classList.contains( 'hidden' ) ? openMenu() : closeMenus() );
+	button.addEventListener( 'mouseenter', () => {
+
+		if ( document.querySelector( '.menu > button[aria-expanded="true"]' ) ) openMenu();
+
+	} );
+	button.addEventListener( 'keydown', ( e ) => {
+
+		if ( e.key === 'ArrowDown' ) {
+
+			e.preventDefault();
+			openMenu();
+			list.querySelector( '[role="menuitem"]' )?.focus();
+
+		}
+
+	} );
+	list.addEventListener( 'keydown', ( e ) => {
+
+		const items = [ ...list.querySelectorAll( '[role="menuitem"]' ) ];
+		const i = items.indexOf( document.activeElement );
+		if ( e.key === 'ArrowDown' || e.key === 'ArrowUp' ) {
+
+			e.preventDefault();
+			items[ ( i + ( e.key === 'ArrowDown' ? 1 : items.length - 1 ) ) % items.length ]?.focus();
+
+		} else if ( e.key === 'Escape' ) {
+
+			closeMenus();
+			button.focus();
+
+		}
+
+	} );
+
+}
+
+document.addEventListener( 'click', ( e ) => {
+
+	if ( ! e.target.closest( '.menu' ) ) closeMenus();
+	const item = e.target.closest( '[data-command], [data-help]' );
+	if ( ! item ) return;
+	closeMenus();
+	if ( item.dataset.help ) openHelp( item.dataset.help );
+	else run( item.dataset.command );
+
+} );
+
+$( 'prompt' ).addEventListener( 'submit', ( e ) => {
+
+	e.preventDefault();
+	const line = $( 'cmd' ).value;
+	$( 'cmd' ).value = '';
+	run( line );
+
+} );
+
 $( 'files' ).addEventListener( 'change', ( e ) => {
 
 	openFiles( [ ...e.target.files ] );
 	e.target.value = '';
 
 } );
+
+$( 'units' ).addEventListener( 'change', () => run( `UNITS ${$( 'units' ).value || 'drawing'}` ) );
+
+document.addEventListener( 'keydown', ( e ) => {
+
+	if ( e.key === 'o' && ( e.ctrlKey || e.metaKey ) && ! e.altKey ) {
+
+		e.preventDefault();
+		run( 'OPEN' );
+		return;
+
+	}
+
+	if ( e.target.closest?.( 'input, textarea, select, dialog' ) || e.ctrlKey || e.metaKey || e.altKey ) return;
+	const key = { f: 'ZOOM', w: 'WIRE', e: 'EDGES', d: 'DIMS' }[ e.key.toLowerCase() ];
+	if ( key ) run( key );
+	else if ( e.key === 'Escape' ) closeMenus();
+
+} );
+
+window.addEventListener( 'hashchange', () => {
+
+	const [ id ] = decodeURIComponent( location.hash.slice( 1 ) ).split( '/' );
+	if ( HELP_TOPICS.includes( id ) ) openHelp( id );
+	else openFromHash();
+
+} );
+
+for ( const tab of document.querySelectorAll( '[data-tab]' ) ) {
+
+	tab.addEventListener( 'click', () => {
+
+		for ( const t of document.querySelectorAll( '[data-tab]' ) ) t.setAttribute( 'aria-selected', String( t === tab ) );
+		for ( const id of [ 'samples', 'properties', 'command' ] ) $( id ).classList.toggle( 'active', id === tab.dataset.tab );
+
+	} );
+
+}
+
+// -- dropping files ---------------------------------------------------------
 
 let dragDepth = 0;
 document.addEventListener( 'dragenter', ( e ) => {
@@ -1245,75 +1615,66 @@ document.addEventListener( 'drop', ( e ) => {
 	e.preventDefault();
 	dragDepth = 0;
 	$( 'dropOverlay' ).classList.add( 'hidden' );
-	if ( e.dataTransfer?.files.length ) openFiles( [ ...e.dataTransfer.files ] );
+	if ( e.dataTransfer?.files.length ) {
+
+		print( 'Command: OPEN (dropped)', 'in' );
+		openFiles( [ ...e.dataTransfer.files ] );
+
+	}
 
 } );
 
-for ( const b of document.querySelectorAll( '[data-view]' ) ) {
+// -- cursor coordinates -----------------------------------------------------
 
-	b.addEventListener( 'click', () => {
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+const ground = new THREE.Plane( new THREE.Vector3( 0, 1, 0 ), 0 );
+const hitPoint = new THREE.Vector3();
+let pointerQueued = false;
 
-		view = b.dataset.view;
-		frameCurrent();
+canvas.addEventListener( 'pointermove', ( e ) => {
+
+	pointer.set( e.offsetX / canvas.clientWidth * 2 - 1, - ( e.offsetY / canvas.clientHeight ) * 2 + 1 );
+	if ( pointerQueued ) return;
+	pointerQueued = true;
+	requestAnimationFrame( () => {
+
+		pointerQueued = false;
+		$( 'coords' ).textContent = coordinates() ?? ' ';
 
 	} );
 
+} );
+canvas.addEventListener( 'pointerleave', () => $( 'coords' ).textContent = ' ' );
+
+function coordinates() {
+
+	if ( ! current?.object ) return null;
+	raycaster.setFromCamera( pointer, camera );
+	let point = null;
+	let where = '';
+	if ( current.measured.triangles <= 300000 ) {
+
+		const hit = raycaster.intersectObject( current.object, true ).find( ( i ) => i.object.isMesh );
+		if ( hit ) point = hitPoint.copy( hit.point );
+
+	}
+
+	if ( ! point && grid ) {
+
+		ground.constant = - grid.position.y;
+		point = raycaster.ray.intersectPlane( ground, hitPoint );
+		where = ' (grid)';
+
+	}
+
+	if ( ! point ) return null;
+	const p = point.clone().add( current.center );
+	return `X ${lengths( [ p.x * 1000, - p.z * 1000, p.y * 1000 ], '  Y ' ).replace( /^(.*)  Y (.*)  Y /, '$1  Y $2  Z ' )}${where}`;
+
 }
 
-function toggle( id, value ) {
-
-	$( id ).setAttribute( 'aria-pressed', String( value ) );
-	return value;
-
-}
-
-$( 'fit' ).addEventListener( 'click', frameCurrent );
-$( 'wire' ).addEventListener( 'click', () => {
-
-	wireframe = toggle( 'wire', ! wireframe );
-	if ( current?.object ) setWireframe( current.object, wireframe );
-
-} );
-$( 'edges' ).addEventListener( 'click', () => {
-
-	edges = toggle( 'edges', ! edges );
-	if ( current?.object && ( ! edges || current.measured.triangles <= EDGE_LIMIT ) ) setEdges( current.object, edges );
-
-} );
-$( 'dims' ).addEventListener( 'click', () => {
-
-	showDims = toggle( 'dims', ! showDims );
-	dims.visible = showDims;
-
-} );
-$( 'lines' ).addEventListener( 'click', () => {
-
-	lines = toggle( 'lines', ! lines );
-	if ( current?.data ) show( current );
-
-} );
-$( 'units' ).addEventListener( 'change', () => {
-
-	autoUnits = false;
-	if ( current?.data ) show( { ...current, units: $( 'units' ).value, unitsNote: null } );
-
-} );
-document.addEventListener( 'keydown', ( e ) => {
-
-	if ( e.target.closest?.( 'input, textarea, select' ) || e.ctrlKey || e.metaKey || e.altKey ) return;
-	const key = e.key.toLowerCase();
-	if ( key === 'f' ) frameCurrent();
-	else if ( key === 'w' ) $( 'wire' ).click();
-	else if ( key === 'e' ) $( 'edges' ).click();
-	else if ( key === 'd' ) $( 'dims' ).click();
-
-} );
-window.addEventListener( 'hashchange', openFromHash );
-
-toggle( 'edges', edges );
-toggle( 'dims', showDims );
-for ( const b of document.querySelectorAll( '[data-view]' ) ) b.setAttribute( 'aria-pressed', String( b.dataset.view === view ) );
-
+syncToggles();
 loadGallery();
 
 // -- thumbnails (used when the site is built) ----------------------------
@@ -1361,10 +1722,7 @@ async function thumbnail( url, size = 160, units = null ) {
 
 }
 
-/**
- * Every test drawing of the gallery, in every version, through the panel's
- * check, as the page converts it. For automated runs: `await demo.verifyAll()`.
- */
+/** For automated runs: `await demo.verifyAll()`. */
 async function verifyAll() {
 
 	const failures = [];
@@ -1392,7 +1750,7 @@ async function verifyAll() {
 }
 
 // for the site build and automated checks
-window.demo = { loader, scene, thumbnail, measure, checkAgainst, verifyAll, get current() {
+window.demo = { loader, scene, thumbnail, measure, checkAgainst, verifyAll, run, get current() {
 
 	return current;
 

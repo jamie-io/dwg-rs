@@ -1,8 +1,8 @@
 {
 	"start": "trim_crossing",
 	"facts": {
-		"commit": "98d4ce9",
-		"commitFull": "98d4ce9d033a2bc7eb0e0196f202f2a5b56d9f4c",
+		"commit": "b0b17ed",
+		"commitFull": "b0b17ed1374fe2958e6989c8878970f048021377",
 		"commitDate": "2026-11-07",
 		"dirty": "",
 		"libredwg": "0.14.1",
