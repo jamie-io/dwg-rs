@@ -1,0 +1,39 @@
+{
+	"title": "WaterBottle",
+	"source": "https://github.com/KhronosGroup/glTF-Sample-Assets/tree/8f492390ddc7a2ae221a1369ef560589cf8c70fb/Models/WaterBottle",
+	"license": "CC0-1.0",
+	"author": "Microsoft",
+	"images": "re-encoded at most 1024 px wide",
+	"writer": "gltf2dwg, dwg-rs 78c0118",
+	"written": [
+		"written: MESH=1 (4510 faces), LINE=0, blocks=0 (INSERT=0)",
+		"materials: 1 (1 textured)"
+	],
+	"triangles": 4510,
+	"area": 0.11768066144640316,
+	"bounds": [
+		[
+			-0.054450009018182755,
+			-0.13022033870220184,
+			-0.05445002391934395
+		],
+		[
+			0.054450009018182755,
+			0.13022033870220184,
+			0.05445002391934395
+		]
+	],
+	"materials": [
+		{
+			"name": "BottleMat",
+			"maps": [
+				"base color",
+				"metallic-roughness",
+				"normal",
+				"occlusion",
+				"emissive"
+			],
+			"extensions": []
+		}
+	]
+}

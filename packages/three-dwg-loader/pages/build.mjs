@@ -3,25 +3,31 @@
 
 // Assembles the static demo site into OUT_DIR: the page, the loader, the
 // WebAssembly module, three.js (from node_modules) and the sample drawings of
-// gallery.json, and renders the gallery thumbnails with the page itself in
-// headless Chrome (software WebGL). Run by scripts/build-pages.sh.
+// gallery.json (every DWG version of each test shape, with its right answer
+// from expected.json, and the round-trip samples in round-trip/), fills the
+// page's {{facts}} (commit, versions, the test report's counts) and renders
+// the thumbnails with the page itself in headless Chrome (software WebGL).
+// Run by scripts/build-pages.sh.
 //
 //   node build.mjs OUT_DIR [--no-thumbs] [--chrome PATH] [--gallery LIST.json]
 //
 // OUT_DIR is emptied first: it must be empty or an earlier build (a .git
 // entry in it is kept, so it can be a worktree of the gh-pages branch).
 
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import zlib from 'node:zlib';
 
 const here = path.dirname( fileURLToPath( import.meta.url ) );
 const pkg = path.resolve( here, '..' );
 const repo = path.resolve( pkg, '../..' );
-const samples = path.join( repo, 'tests/bricscad/dwg/v27' );
+const corpus = path.join( repo, 'tests/bricscad/dwg/v27' );
+const corpusReport = path.join( repo, 'tests/bricscad/report/v27.md' );
+const roundTrips = path.join( here, 'round-trip' );
 
 const args = process.argv.slice( 2 );
 const option = ( name ) => args.includes( name ) ? args[ args.indexOf( name ) + 1 ] : null;
@@ -63,9 +69,9 @@ for ( const entry of existing ) {
 
 }
 
-copy( path.join( here, 'index.html' ), 'index.html' );
 copy( path.join( here, 'app.js' ), 'app.js' );
 fs.writeFileSync( path.join( outDir, '.nojekyll' ), '' );
+for ( const file of fs.readdirSync( path.join( here, 'fonts' ) ) ) copy( path.join( here, 'fonts', file ), `fonts/${file}` );
 
 for ( const file of [ 'DWGLoader.js', 'core.js', 'wasi.js', 'WorkerPool.js', 'DWGWorker.js' ] ) {
 
@@ -94,6 +100,7 @@ if ( ! fs.existsSync( three ) ) {
 for ( const file of [
 	'build/three.module.js', 'build/three.core.js',
 	'examples/jsm/controls/OrbitControls.js', 'examples/jsm/environments/RoomEnvironment.js',
+	'examples/jsm/renderers/CSS2DRenderer.js',
 	'examples/jsm/loaders/GLTFLoader.js', 'examples/jsm/utils/BufferGeometryUtils.js',
 	'examples/jsm/utils/SkeletonUtils.js',
 ] ) {
@@ -105,24 +112,101 @@ for ( const file of [
 // with an extension, so the server sends it as text
 copy( path.join( three, 'LICENSE' ), 'vendor/three/LICENSE.txt' );
 
+// -- facts for the page ----------------------------------------------------
+
+const git = ( ...a ) => execFileSync( 'git', [ '-C', repo, ...a ], { encoding: 'utf8' } ).trim();
+const megabytes = ( n ) => `${( n / 1048576 ).toFixed( 1 )} MB`;
+const wasmBytes = fs.readFileSync( wasm );
+const expected = JSON.parse( fs.readFileSync( path.join( corpus, 'expected.json' ), 'utf8' ) );
+const reportText = fs.readFileSync( corpusReport, 'utf8' );
+const results = { 'match': 0, 'bounds only': 0, 'differs': 0, 'failed': 0, 'absent': 0 };
+for ( const [ , result ] of reportText.matchAll( /^\| `[^`]+` \| ([a-z ]+) \|/gm ) ) results[ result ] = ( results[ result ] ?? 0 ) + 1;
+const facts = {
+	commit: git( 'rev-parse', '--short=7', 'HEAD' ),
+	commitFull: git( 'rev-parse', 'HEAD' ),
+	commitDate: git( 'log', '-1', '--format=%cs' ),
+	dirty: git( 'status', '--porcelain', '--untracked-files=no' ) ? ' plus uncommitted changes' : '',
+	libredwg: /LibreDWG version ([\w.]+)/.exec( fs.readFileSync( path.join( repo, 'crates/libredwg-sys/libredwg/NEWS' ), 'utf8' ) )?.[ 1 ] ?? '?',
+	three: JSON.parse( fs.readFileSync( path.join( three, 'package.json' ), 'utf8' ) ).version,
+	wasmSize: megabytes( wasmBytes.length ),
+	wasmGzip: megabytes( zlib.gzipSync( wasmBytes, { level: 9 } ).length ),
+	corpusFiles: String( Object.keys( expected ).length ),
+	corpusShapes: String( new Set( Object.values( expected ).map( ( e ) => e.shape ) ).size ),
+	corpusVersions: String( new Set( Object.values( expected ).map( ( e ) => e.version ) ).size ),
+	reportCommit: /^Converter: commit `([^`]+)`/m.exec( reportText )?.[ 1 ] ?? '?',
+	match: String( results.match ),
+	boundsOnly: String( results[ 'bounds only' ] ),
+	differs: String( results.differs ),
+	failed: String( results.failed + results.absent ),
+	decodeWarnings: /LibreDWG decode warnings on (\d+) files/.exec( reportText )?.[ 1 ] ?? '0',
+};
+const reported = Object.values( results ).reduce( ( a, b ) => a + b, 0 );
+if ( reported !== Object.keys( expected ).length ) {
+
+	console.error( `${path.relative( repo, corpusReport )} lists ${reported} files, expected.json ${Object.keys( expected ).length}: run tests/bricscad/measure.py` );
+	process.exit( 1 );
+
+}
+
+let page = fs.readFileSync( path.join( here, 'index.html' ), 'utf8' );
+page = page.replace( /\{\{(\w+)\}\}/g, ( all, key ) => {
+
+	if ( ! ( key in facts ) ) throw new Error( `index.html: no fact {{${key}}}` );
+	return facts[ key ];
+
+} );
+fs.writeFileSync( path.join( outDir, 'index.html' ), page );
+
 // -- gallery ------------------------------------------------------------
 
+/** The right answer of one test drawing, as much as the page compares. */
+function answer( key ) {
+
+	const e = expected[ key ];
+	if ( ! e ) return null;
+	return { area: e.area, volume: e.volume, bounds: e.bounds, closed: e.closed, facing: e.facing };
+
+}
+
 const source = JSON.parse( fs.readFileSync( galleryList, 'utf8' ) );
-const gallery = { start: source.start, groups: [] };
+const gallery = { start: source.start, facts, groups: [] };
 for ( const group of source.groups ) {
 
 	const items = [];
-	for ( const { file, title } of group.items ) {
+	for ( const { shape, sample, title, about } of group.items ) {
 
-		const name = path.basename( file );
-		const id = name.replace( /\.dwg$/i, '' );
-		const version = /_(AC\d{4})\.dwg$/i.exec( name )?.[ 1 ] ?? null;
-		copy( path.join( samples, file ), `gallery/${name}` );
-		items.push( { id, title, version, file: `gallery/${name}` } );
+		if ( shape ) {
+
+			// every version BricsCAD saved this shape in
+			const name = path.basename( shape );
+			const versions = fs.readdirSync( path.join( corpus, shape ) )
+				.map( ( f ) => new RegExp( `^${name}_(AC\\d{4})\\.dwg$` ).exec( f )?.[ 1 ] )
+				.filter( Boolean ).sort()
+				.map( ( version ) => {
+
+					const file = `${name}_${version}.dwg`;
+					copy( path.join( corpus, shape, file ), `gallery/${file}` );
+					return { version, file: `gallery/${file}`, expected: answer( `${shape}/${file}` ) };
+
+				} );
+			if ( versions.length === 0 ) throw new Error( `gallery.json: no drawings for ${shape}` );
+			const fallback = versions.find( ( v ) => v.version === 'AC1032' ) ?? versions.at( - 1 );
+			items.push( { id: name, title, about, versions, default: fallback.version } );
+
+		} else {
+
+			// a round trip: round-trip/<sample>.dwg and what its source held
+			const data = fs.readFileSync( path.join( roundTrips, `${sample}.dwg` ) );
+			const version = data.subarray( 0, 6 ).toString( 'latin1' );
+			copy( path.join( roundTrips, `${sample}.dwg` ), `gallery/${sample}.dwg` );
+			const info = JSON.parse( fs.readFileSync( path.join( roundTrips, `${sample}.json` ), 'utf8' ) );
+			items.push( { id: sample, title, about, versions: [ { version, file: `gallery/${sample}.dwg`, expected: null } ], default: version, source: info } );
+
+		}
 
 	}
 
-	gallery.groups.push( { title: group.title, items } );
+	gallery.groups.push( { title: group.title, note: group.note, items } );
 
 }
 
@@ -176,8 +260,9 @@ async function renderThumbnails() {
 
 			for ( const item of group.items ) {
 
+				const shown = item.versions.find( ( v ) => v.version === item.default );
 				const { result, exceptionDetails } = await page.send( 'Runtime.evaluate', {
-					expression: `demo.thumbnail(${JSON.stringify( item.file )}, 320)`,
+					expression: `demo.thumbnail(${JSON.stringify( shown.file )}, 112)`,
 					awaitPromise: true, returnByValue: true,
 				} );
 				if ( exceptionDetails ) {

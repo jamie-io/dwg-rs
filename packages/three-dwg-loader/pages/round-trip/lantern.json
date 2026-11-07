@@ -1,0 +1,38 @@
+{
+	"title": "Lantern",
+	"source": "https://github.com/KhronosGroup/glTF-Sample-Assets/tree/8f492390ddc7a2ae221a1369ef560589cf8c70fb/Models/Lantern",
+	"license": "CC0-1.0",
+	"author": "Microsoft",
+	"images": "re-encoded at most 1024 px wide",
+	"writer": "gltf2dwg, dwg-rs 78c0118",
+	"written": [
+		"written: MESH=3 (5394 faces), LINE=0, blocks=0 (INSERT=0)",
+		"materials: 1 (1 textured)"
+	],
+	"triangles": 5394,
+	"area": 434.9242094073105,
+	"bounds": [
+		[
+			-3.922445059866943,
+			0.18392054870605534,
+			-2.3157098293304443
+		],
+		[
+			11.568753479866944,
+			25.848139451293946,
+			2.3157098293304443
+		]
+	],
+	"materials": [
+		{
+			"name": "LanternPost_Mat",
+			"maps": [
+				"base color",
+				"metallic-roughness",
+				"normal",
+				"emissive"
+			],
+			"extensions": []
+		}
+	]
+}

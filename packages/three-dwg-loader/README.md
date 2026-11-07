@@ -181,9 +181,13 @@ DWG_WASM=wasm/dwg2gltf.dev.wasm npm test   # after scripts/build-wasm.sh --dev (
 The demo also loads URLs: `demo/?url=/path/to/file.dwg`.
 
 The public demo site (GitHub Pages: the page in `pages/`, the loader, the
-module, three.js and a gallery of the BricsCAD test drawings with
-thumbnails rendered in headless Chrome) is built with
-`scripts/build-pages.sh <out-dir>`.
+module, three.js, the BricsCAD test drawings listed in `pages/gallery.json`
+in every DWG version with their right answers, the round-trip samples in
+`pages/round-trip/` and thumbnails rendered in headless Chrome) is built with
+`scripts/build-pages.sh <out-dir>`. Its facts (commit, LibreDWG and three.js
+versions, the counts of `tests/bricscad/report/v27.md`) are filled in when it
+is built. For the test drawings, the page measures the converted mesh like
+`tests/bricscad/measure.py` and compares it with the right answer.
 
 The tests convert a generated series DWG
 (`crates/dwg2gltf/examples/series_fixture.rs`) and every DWG in a local

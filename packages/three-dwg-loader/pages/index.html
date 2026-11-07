@@ -6,101 +6,257 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>dwg-rs: DWG to glTF in the browser</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 1 15 5v6l-7 4-7-4V5z' fill='%232a64c9'/%3E%3C/svg%3E">
-<meta name="description" content="Open AutoCAD DWG drawings in 3D in your browser: dwg-rs converts them to glTF with WebAssembly, locally, nothing is uploaded.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2 13h12M2 13l1.5-1.5M14 13l-1.5-1.5M2 3v10M14 3v10' stroke='%230b6e83' stroke-width='1.6' fill='none'/%3E%3C/svg%3E">
+<meta name="description" content="Open AutoCAD DWG drawings in 3D in your browser. dwg-rs converts them to glTF with WebAssembly, in the tab: nothing is uploaded. With its test results and its limits.">
 <style>
-	:root {
-		--bg: #f3f3ef; --panel: #fbfbf9; --text: #1d1d1b; --muted: #6b6b66;
-		--line: #dcdcd5; --accent: #2a64c9; --accent-soft: #e3ebf8; --error: #b42318;
-		--view: #e6e6e0; --card: #ecece6; --chip: #ffffffcc; --on-accent: #ffffff;
-		color-scheme: light dark;
+	@font-face {
+		font-family: "osifont";
+		src: url("fonts/osifont-subset.woff") format("woff");
+		font-display: swap;
 	}
+
+	:root {
+		--paper: #eff2f3;
+		--ink: #1d2226;
+		--muted: #5b656d;
+		--rule: #cbd2d7;
+		--frame: #39424a;
+		--link: #0b6e83;
+		--tint: #dde9ec;
+		--ok: #23794a;
+		--warn: #8a5a00;
+		--bad: #b42318;
+		--model: #e2e6e9;
+		--model-ink: #1d2226;
+		--model-muted: #5b656d;
+		--chip: #f7f8f9e6;
+		--chip-line: #1d222629;
+		--dim: #0a7489;
+		--code: #e4e9ec;
+		--sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+		--mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+		--drafting: "osifont", var(--sans);
+		color-scheme: light;
+	}
+
 	@media (prefers-color-scheme: dark) {
 		:root {
-			--bg: #141413; --panel: #1b1b1a; --text: #ececea; --muted: #9a9a94;
-			--line: #31312d; --accent: #78a3f2; --accent-soft: #1f2a3d; --error: #f97066;
-			--view: #222221; --card: #262625; --chip: #1b1b1acc; --on-accent: #0d1626;
+			--paper: #1a1e22;
+			--ink: #e1e6e9;
+			--muted: #9ba5ad;
+			--rule: #343b42;
+			--frame: #8f9aa3;
+			--link: #6fcfe1;
+			--tint: #22343a;
+			--ok: #5cc28a;
+			--warn: #e0aa45;
+			--bad: #f2776a;
+			--code: #242a30;
+			--model: #d3d9dd;
+			color-scheme: dark;
 		}
 	}
+
 	* { box-sizing: border-box; }
-	html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
-		font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-	body { display: grid; grid-template-columns: 360px minmax(0, 1fr); }
-	a { color: var(--accent); }
-	code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-	button { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line);
-		border-radius: 7px; padding: 5px 11px; cursor: pointer; }
-	button:hover:not(:disabled) { border-color: var(--accent); }
-	button[aria-pressed=true] { background: var(--accent-soft); border-color: var(--accent); }
-	button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-	button:disabled { opacity: .45; cursor: default; }
+	html { background: var(--paper); color: var(--ink); }
+	body { margin: 0; font: 15px/1.55 var(--sans); }
+	a { color: var(--link); text-underline-offset: 2px; }
+	a:hover { text-decoration-thickness: 2px; }
+	:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+	code, pre, kbd { font-family: var(--mono); font-size: 0.87em; }
 	.hidden { display: none !important; }
+	.num { font-variant-numeric: tabular-nums; }
 
-	/* sidebar */
-	aside { background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto;
-		padding: 20px 18px; display: flex; flex-direction: column; gap: 18px; }
-	header h1 { font-size: 21px; margin: 0; letter-spacing: -.01em; }
-	header h1 span { color: var(--muted); font-weight: 500; }
-	header p { margin: 6px 0 0; color: var(--muted); }
-	h2 { font-size: 11.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted);
-		margin: 0 0 8px; font-weight: 600; }
-	.intro p { margin: 0 0 8px; }
-	.links { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+	button, select { font: inherit; color: inherit; }
+	button { cursor: pointer; }
+	button:disabled { cursor: default; opacity: .45; }
 
-	#drop { border: 1.5px dashed var(--line); border-radius: 10px; padding: 16px 12px; text-align: center; }
-	#drop p { margin: 8px 0 0; color: var(--muted); font-size: 12.5px; }
+	/* -- masthead ------------------------------------------------------ */
 
-	.group + .group { margin-top: 14px; }
-	.group h3 { font-size: 12.5px; margin: 0 0 6px; font-weight: 600; }
-	.grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
-	.card { display: flex; flex-direction: column; align-items: stretch; gap: 2px; padding: 4px 4px 5px;
-		background: var(--card); border: 1px solid transparent; border-radius: 8px; text-align: left; }
-	.card:hover { border-color: var(--accent); }
-	.card[aria-current=true] { border-color: var(--accent); background: var(--accent-soft); }
-	.card img { width: 100%; height: auto; aspect-ratio: 1; object-fit: contain; display: block; }
-	.card .thumb-none { width: 100%; aspect-ratio: 1; display: grid; place-items: center; color: var(--muted); font-size: 11px; }
-	.card .name { font-size: 11.5px; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.card .ver { font-size: 10.5px; color: var(--muted); }
+	.masthead {
+		display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center;
+		gap: 4px 28px; padding: 14px 20px; border-bottom: 1px solid var(--rule);
+	}
+	.wordmark { font: 30px/1 var(--drafting); color: var(--ink); text-decoration: none; letter-spacing: .01em; }
+	.claim { margin: 0; color: var(--muted); max-width: 62ch; font-size: 14px; line-height: 1.45; }
+	.claim strong { color: var(--ink); font-weight: 600; }
+	.actions { display: flex; align-items: center; gap: 18px; }
+	.actions nav { display: flex; gap: 16px; font-size: 14px; }
+	.open { display: grid; justify-items: end; gap: 2px; }
+	.primary {
+		background: var(--ink); color: var(--paper); border: 0; border-radius: 4px;
+		padding: 8px 14px; font-weight: 600; font-size: 14px;
+	}
+	.primary:hover { background: var(--link); }
+	.open small { color: var(--muted); font-size: 12px; }
 
-	footer { margin-top: auto; color: var(--muted); font-size: 12px; display: grid; gap: 6px; }
-	footer p { margin: 0; }
+	/* -- workspace: samples | model space | inspector --------------------- */
 
-	/* viewer */
-	main { position: relative; min-width: 0; min-height: 0; background: var(--view); }
-	canvas { display: block; width: 100%; height: 100%; touch-action: none; }
-	.toolbar { position: absolute; top: 12px; right: 12px; display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-	.toolbar button { background: var(--chip); backdrop-filter: blur(6px); }
-	#info { position: absolute; left: 12px; bottom: 12px; max-width: min(460px, calc(100% - 24px));
-		background: var(--chip); backdrop-filter: blur(6px); border: 1px solid var(--line); border-radius: 10px;
-		padding: 10px 12px; font-size: 12.5px; }
-	#info .title { font-weight: 600; font-size: 13.5px; overflow-wrap: anywhere; }
-	#info dl { display: grid; grid-template-columns: auto 1fr; gap: 1px 12px; margin: 6px 0 0; }
-	#info dt { color: var(--muted); }
-	#info dd { margin: 0; font-variant-numeric: tabular-nums; }
-	#info details { margin-top: 6px; }
-	#info summary { cursor: pointer; color: var(--muted); }
-	pre { margin: 4px 0 0; white-space: pre-wrap; word-break: break-word; max-height: 30vh; overflow: auto;
-		font: 11.5px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-	#info .error { color: var(--error); white-space: pre-wrap; margin-top: 4px; }
-	#empty { position: absolute; inset: 0; display: grid; place-items: center; text-align: center;
-		color: var(--muted); pointer-events: none; padding: 24px; }
-	#busy { position: absolute; top: 14px; left: 14px; display: flex; align-items: center; gap: 8px;
-		background: var(--chip); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px 4px 8px; font-size: 12.5px; }
-	#busy::before { content: ""; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--line);
-		border-top-color: var(--accent); animation: spin .8s linear infinite; }
+	.workspace {
+		display: grid; grid-template-columns: 290px minmax(0, 1fr) 360px;
+		height: calc(100svh - 120px); min-height: 560px; border-bottom: 1px solid var(--rule);
+	}
+
+	.samples { overflow-y: auto; border-right: 1px solid var(--rule); padding: 14px 0 20px; }
+	.samples > header { padding: 0 16px 10px; }
+	.samples h2 { font-size: 15px; margin: 0; }
+	.samples > header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+	.group { padding: 10px 0 4px; }
+	.group h3 { font-size: 13px; font-weight: 600; margin: 0; padding: 4px 16px; }
+	.group > p { margin: 0 16px 6px; color: var(--muted); font-size: 12.5px; line-height: 1.4; }
+	.sample {
+		display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 10px; align-items: center;
+		width: 100%; padding: 6px 16px 6px 13px; background: none; border: 0;
+		border-left: 3px solid transparent; text-align: left;
+	}
+	.sample:hover { background: var(--tint); }
+	.sample[aria-current="true"] { border-left-color: var(--link); background: var(--tint); }
+	.sample img, .sample .nothumb { width: 44px; height: 44px; object-fit: contain; display: block; background: var(--model); border-radius: 3px; }
+	.sample .nothumb { border: 1px dashed var(--rule); }
+	.sample b { display: block; font-size: 13.5px; font-weight: 600; line-height: 1.3; }
+	.sample span { display: block; color: var(--muted); font-size: 12px; line-height: 1.35;
+		overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+
+	/* model space: light, as the converter writes color 7 black, the foreground color on a light background */
+	.model { position: relative; min-width: 0; min-height: 0; background: var(--model); color: var(--model-ink); }
+	.model canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+	#labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+	.dimtext {
+		font: 15px/1 var(--drafting); color: var(--dim); background: color-mix(in srgb, var(--model) 85%, transparent);
+		padding: 2px 4px; white-space: nowrap;
+	}
+	.bar { position: absolute; top: 10px; left: 10px; right: 10px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; pointer-events: none; }
+	.bar > * { pointer-events: auto; }
+	.tools { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+	.seg { display: inline-flex; border: 1px solid var(--chip-line); border-radius: 4px; overflow: hidden; background: var(--chip); }
+	.seg button, .chip {
+		background: none; border: 0; color: var(--model-ink); padding: 5px 10px; font-size: 13px; line-height: 1.3;
+	}
+	.seg button + button { border-left: 1px solid var(--chip-line); }
+	.seg button:hover:not(:disabled), .chip:hover:not(:disabled) { background: #0a74891a; }
+	.seg button[aria-pressed="true"] { color: var(--dim); background: #0a748924; font-weight: 600; }
+	.chip { border: 1px solid var(--chip-line); border-radius: 4px; background: var(--chip); }
+	.units { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; padding: 0 4px 0 10px;
+		border: 1px solid var(--chip-line); border-radius: 4px; background: var(--chip); color: var(--model-muted); }
+	.units select { background: none; border: 0; color: var(--model-ink); padding: 5px 2px; color-scheme: light; }
+	.status {
+		position: absolute; left: 96px; bottom: 14px; max-width: calc(100% - 110px);
+		font-size: 13px; color: var(--model-ink); background: var(--chip); border: 1px solid var(--chip-line);
+		border-radius: 4px; padding: 4px 10px;
+	}
+	.status.error { color: #b42318; border-color: #b4231866; }
+	.status.working::before {
+		content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 8px; vertical-align: -1px;
+		border: 2px solid #1d222633; border-top-color: var(--dim); border-radius: 50%; animation: spin .8s linear infinite;
+	}
 	@keyframes spin { to { transform: rotate(360deg); } }
-	#dropOverlay { position: fixed; inset: 0; display: grid; place-items: center; z-index: 10;
-		background: color-mix(in srgb, var(--accent) 18%, transparent); border: 3px dashed var(--accent);
-		font-size: 18px; font-weight: 600; color: var(--accent); pointer-events: none; }
+	@media (prefers-reduced-motion: reduce) { .status.working::before { animation: none; } }
+	.legend { position: absolute; right: 12px; bottom: 12px; text-align: right; font-size: 12px; color: var(--model-muted); line-height: 1.5; }
+	#empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; color: var(--model-muted); pointer-events: none; }
+
+	/* inspector: a title block, then the converter's own account */
+	.inspector { overflow-y: auto; border-left: 1px solid var(--rule); padding: 14px 16px 24px; font-size: 13.5px; }
+	.inspector h3 { font-size: 13.5px; margin: 20px 0 6px; }
+	.inspector p { margin: 6px 0; }
+	.inspector .muted { color: var(--muted); }
+	.titleblock { border: 1.5px solid var(--frame); display: grid; grid-template-columns: 1fr 1fr; }
+	.titleblock > div { padding: 5px 8px 6px; border-top: 1px solid var(--rule); min-width: 0; }
+	.titleblock > div:nth-child(even) { border-left: 1px solid var(--rule); }
+	.titleblock > .wide { grid-column: 1 / -1; border-left: 0 !important; }
+	.titleblock > div:first-child { border-top: 0; }
+	.titleblock dt { font-size: 11.5px; color: var(--muted); }
+	.titleblock dd { margin: 1px 0 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+	.titleblock .drawing { font: 19px/1.25 var(--drafting); }
+	.versions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+	.versions button {
+		border: 1px solid var(--rule); background: none; border-radius: 3px; padding: 1px 6px; font-size: 12.5px;
+		font-variant-numeric: tabular-nums;
+	}
+	.versions button:hover { border-color: var(--link); }
+	.versions button[aria-pressed="true"] { border-color: var(--link); background: var(--tint); color: var(--link); font-weight: 600; }
+	table { border-collapse: collapse; width: 100%; }
+	.inspector table { font-size: 13px; }
+	.inspector th, .inspector td { text-align: left; padding: 4px 6px 4px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+	.inspector th { font-weight: 500; color: var(--muted); font-size: 12px; }
+	.inspector td.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; padding-right: 0; }
+	.verdict { margin: 8px 0 0; padding: 7px 10px; border-left: 3px solid var(--ok); background: color-mix(in srgb, var(--ok) 9%, transparent); }
+	.verdict.bad { border-left-color: var(--bad); background: color-mix(in srgb, var(--bad) 9%, transparent); }
+	.verdict.note { border-left-color: var(--warn); background: color-mix(in srgb, var(--warn) 9%, transparent); }
+	.pass { color: var(--ok); }
+	.fail { color: var(--bad); }
+	.warnings { margin: 0; padding-left: 18px; }
+	.warnings li { margin: 4px 0; }
+	.warnings li small { display: block; color: var(--muted); font-size: 12.5px; }
+	.buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+	.buttons button, .buttons a {
+		border: 1px solid var(--rule); background: none; border-radius: 4px; padding: 5px 10px; font-size: 13px;
+		color: var(--ink); text-decoration: none;
+	}
+	.buttons button:hover:not(:disabled), .buttons a:hover { border-color: var(--link); }
+	pre.summary { white-space: pre-wrap; word-break: break-word; background: var(--code); padding: 8px 10px; margin: 6px 0 0; font-size: 12px; line-height: 1.45; max-height: 40vh; overflow: auto; }
+
+	/* -- the sheet below: what it reads, what it leaves out, tests, use --- */
+
+	.sheet { max-width: 1120px; padding: 40px 20px 24px; margin: 0 auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 56px; }
+	.sheet section { min-width: 0; }
+	.sheet .full { grid-column: 1 / -1; }
+	.sheet h2 { font-size: 21px; line-height: 1.3; margin: 28px 0 10px; letter-spacing: -.005em; }
+	.sheet p, .sheet li { max-width: 68ch; }
+	.sheet ul { padding-left: 20px; }
+	.sheet li { margin: 6px 0; }
+	.sheet table { font-size: 14px; }
+	.sheet th, .sheet td { text-align: left; vertical-align: top; padding: 7px 14px 7px 0; border-bottom: 1px solid var(--rule); }
+	.sheet th { font-weight: 600; border-bottom-color: var(--frame); }
+	.sheet td:first-child { width: 42%; }
+	.figures { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1.5px solid var(--frame); border-bottom: 1px solid var(--rule); margin: 14px 0 6px; }
+	.figures div { padding: 10px 12px 12px 0; }
+	.figures b { display: block; font: 28px/1.15 var(--drafting); font-variant-numeric: tabular-nums; }
+	.figures span { color: var(--muted); font-size: 13px; line-height: 1.35; display: block; }
+	pre.code { background: var(--code); padding: 12px 14px; overflow-x: auto; font-size: 13px; line-height: 1.5; margin: 8px 0 14px; }
+	footer { max-width: 1120px; margin: 0 auto; padding: 20px 20px 40px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--rule); }
+	footer p { margin: 4px 0; max-width: 100ch; }
+
+	#dropOverlay {
+		position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; pointer-events: none;
+		background: color-mix(in srgb, var(--model) 80%, transparent); color: var(--dim);
+		font: 24px/1.3 var(--drafting); border: 2px dashed var(--dim);
+	}
+
+	/* -- narrower screens ------------------------------------------------ */
+
+	@media (max-width: 1180px) {
+		.workspace { grid-template-columns: minmax(0, 1fr) 340px; grid-template-rows: minmax(0, 1fr) auto; height: auto; }
+		.model { height: calc(100svh - 230px); min-height: 420px; }
+		.inspector { grid-row: 1 / span 2; grid-column: 2; max-height: calc(100svh - 120px); }
+		.samples { grid-row: 2; grid-column: 1; border-right: 0; border-top: 1px solid var(--rule); overflow-x: auto; overflow-y: hidden; padding: 10px 0; }
+		.samples > header { display: none; }
+		#gallery { display: flex; }
+		.group { display: flex; padding: 0; border-right: 1px solid var(--rule); }
+		.group h3, .group > p { display: none; }
+		.sample { grid-template-columns: 44px; width: auto; padding: 4px 8px; border-left: 0; border-bottom: 3px solid transparent; }
+		.sample[aria-current="true"] { border-bottom-color: var(--link); }
+		.sample b, .sample span { display: none; }
+	}
 
 	@media (max-width: 760px) {
-		body { grid-template-columns: 1fr; grid-template-rows: 60vh auto; height: auto; }
-		html, body { height: auto; }
-		main { order: 1; height: 60vh; }
-		aside { order: 2; border-right: 0; border-top: 1px solid var(--line); overflow: visible; padding: 16px; }
-		.grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+		.masthead { grid-template-columns: minmax(0, 1fr) auto; padding: 12px 16px; }
+		.claim { grid-column: 1 / -1; grid-row: 2; }
+		.actions nav { display: none; }
+		.workspace { display: flex; flex-direction: column; }
+		.model { order: 1; }
+		.samples { order: 2; }
+		.inspector { order: 3; }
+		.model { height: auto; }
+		.model canvas { height: 58svh; min-height: 340px; }
+		.bar { position: static; padding: 8px 10px 10px; justify-content: flex-start; }
+		.samples { border-top: 1px solid var(--rule); }
+		.inspector { max-height: none; border-left: 0; border-top: 1px solid var(--rule); }
+		.status { left: 10px; top: 10px; bottom: auto; max-width: calc(100% - 20px); }
+		.legend { display: none; }
+		.sheet { grid-template-columns: minmax(0, 1fr); padding: 24px 16px; }
+		.figures { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+		footer { padding: 20px 16px 32px; }
 	}
-	@media (max-width: 420px) { .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 </style>
 <script type="importmap">
 	{
@@ -112,70 +268,150 @@
 </script>
 </head>
 <body>
-<aside>
-	<header>
-		<h1>dwg-rs <span>demo</span></h1>
-		<p>AutoCAD DWG drawings in 3D, converted right here in your browser.</p>
-	</header>
-
-	<section class="intro">
-		<p><strong>dwg-rs</strong> converts DWG files to glTF 2.0. It is written in Rust, reads
-			ACIS solids and surfaces with its own B-rep tessellator, keeps materials and
-			textures, and runs as a three.js loader compiled to WebAssembly: that is what
-			this page uses.</p>
-		<div class="links">
-			<a href="https://github.com/jamie-io/dwg-rs">Source on GitHub</a>
-			<a href="https://github.com/jamie-io/dwg-rs/tree/main/packages/three-dwg-loader">three.js loader</a>
+<header class="masthead">
+	<a class="wordmark" href="./">dwg-rs</a>
+	<p class="claim"><strong>Converts AutoCAD DWG drawings to glTF 2.0.</strong>
+		Written in Rust; the command line tools and this page are built from the same source. Here it runs as WebAssembly in your browser.</p>
+	<div class="actions">
+		<nav aria-label="On this page and elsewhere">
+			<a href="#limits">Limits</a>
+			<a href="#tests">Tests</a>
+			<a href="#use">Use it</a>
+			<a href="https://github.com/jamie-io/dwg-rs">Source</a>
+		</nav>
+		<div class="open">
+			<button id="open" class="primary" type="button">Open a DWG file</button>
+			<small>Converted in this tab, not uploaded</small>
 		</div>
-	</section>
+	</div>
+	<input id="files" type="file" accept=".dwg,.png,.jpg,.jpeg" multiple class="hidden">
+</header>
 
-	<section>
-		<h2>Your drawing</h2>
-		<div id="drop">
-			<button id="open" class="primary" type="button">Open a DWG file…</button>
-			<p>or drop it anywhere on this page (with its texture images, if any).
-				<strong>Nothing is uploaded</strong>: the file is converted locally, in your browser.</p>
+<div class="workspace">
+	<aside class="samples" aria-label="Sample drawings">
+		<header>
+			<h2>Sample drawings</h2>
+			<p>From the test suite: each shape drawn in BricsCAD and saved in every DWG version from R14 to 2018, with its area, volume and extents known.</p>
+		</header>
+		<div id="gallery"><p class="muted" style="padding: 0 16px">Loading the list…</p></div>
+	</aside>
+
+	<main class="model" aria-label="3D view of the converted drawing">
+		<canvas id="view"></canvas>
+		<div id="labels"></div>
+		<div id="empty">Open a DWG file, drop one here, or pick a sample.</div>
+		<div class="bar">
+			<div class="seg" role="group" aria-label="View direction">
+				<button type="button" data-view="iso" title="South-east isometric">Iso</button>
+				<button type="button" data-view="top" title="Looking down the Z axis">Top</button>
+				<button type="button" data-view="front" title="Looking along the Y axis">Front</button>
+				<button type="button" data-view="right" title="Looking against the X axis">Right</button>
+			</div>
+			<div class="tools">
+				<div class="seg" role="group" aria-label="Show">
+					<button type="button" id="edges" aria-pressed="true" title="Feature edges (E)">Edges</button>
+					<button type="button" id="wire" aria-pressed="false" title="Show the triangles (W)">Triangles</button>
+					<button type="button" id="dims" aria-pressed="true" title="Overall dimensions (D)">Dimensions</button>
+					<button type="button" id="lines" aria-pressed="true" title="Convert lines, arcs and polylines too">Lines</button>
+				</div>
+				<label class="units">Units
+					<select id="units" title="The drawing's units. R14 drawings cannot store them.">
+						<option value="">as drawn</option>
+						<option value="mm">mm</option>
+						<option value="cm">cm</option>
+						<option value="m">m</option>
+						<option value="in">in</option>
+						<option value="ft">ft</option>
+					</select>
+				</label>
+				<button type="button" class="chip" id="fit" title="Frame the drawing (F)">Fit</button>
+			</div>
 		</div>
-		<input id="files" type="file" accept=".dwg,.png,.jpg,.jpeg" multiple class="hidden">
-	</section>
+		<div id="busy" class="status hidden" role="status" aria-live="polite"></div>
+		<div class="legend"><span id="gridLabel"></span><br>Drag to orbit, right-drag to pan, scroll to zoom</div>
+	</main>
 
+	<section class="inspector" id="inspector" aria-label="Conversion details" aria-live="polite">
+		<p class="muted">The details of the conversion appear here.</p>
+	</section>
+</div>
+
+<article class="sheet">
 	<section>
-		<h2>Sample drawings</h2>
-		<div id="gallery"><p class="muted">Loading the list…</p></div>
+		<h2>What it reads</h2>
+		<p>LibreDWG ({{libredwg}}, patched and compiled in) decodes the file. dwg-rs builds the geometry from it, including the ACIS solids, which it tessellates itself: no CAD kernel is involved.</p>
+		<table>
+			<thead><tr><th>In the DWG</th><th>In the glTF</th></tr></thead>
+			<tbody>
+				<tr><td><code>3DSOLID</code>, <code>BODY</code>, <code>REGION</code>, <code>SURFACE</code> (ACIS)</td><td>Triangles from the B-rep: planes, cones, spheres, tori and NURBS, less than 0.1 mm from the true surface, but never finer than 0.1 % of the body's size</td></tr>
+				<tr><td><code>MESH</code>, polyface and polygon meshes, <code>3DFACE</code>, <code>SOLID</code>, <code>TRACE</code></td><td>Triangles with smoothed normals</td></tr>
+				<tr><td><code>LINE</code>, <code>ARC</code>, <code>CIRCLE</code>, <code>ELLIPSE</code>, polylines, <code>SPLINE</code></td><td>Line segments; with a thickness or a width, surfaces</td></tr>
+				<tr><td><code>INSERT</code>, <code>MINSERT</code></td><td>One node per instance, sharing the block's mesh</td></tr>
+				<tr><td>Layer and ByBlock colors, <code>MATERIAL</code> objects, embedded OFML material archives</td><td>PBR materials and textures</td></tr>
+				<tr><td><code>INSUNITS</code></td><td>Scale to meters; Z-up turned to glTF's Y-up</td></tr>
+			</tbody>
+		</table>
+		<p>The ACIS data is read in all three ways DWG stores it: as SAT text (R14 to 2004), as SAB binary in the entity (2007 and later) and in the data-storage section of 2013 and later.</p>
 	</section>
 
-	<footer>
-		<p>dwg-rs is free software under the
-			<a href="https://github.com/jamie-io/dwg-rs/blob/main/LICENSE">GPL-3.0-or-later</a>.
-			DWG decoding by <a href="https://www.gnu.org/software/libredwg/">GNU LibreDWG</a>
-			(GPL-3.0-or-later), compiled into the WebAssembly module;
-			rendering by <a href="https://threejs.org/">three.js</a>
-			(<a href="vendor/three/LICENSE.txt">MIT</a>).</p>
-		<p>The samples are test drawings of the project, written by BricsCAD in each DWG version
-			from R14 to 2018.</p>
-		<p>DWG is the native file format of AutoCAD, a trademark of Autodesk, Inc. This project
-			is not affiliated with Autodesk.</p>
-	</footer>
-</aside>
-<main>
-	<canvas id="view"></canvas>
-	<div id="empty">Pick a sample drawing or open a DWG file.</div>
-	<div class="toolbar">
-		<button id="fit" type="button" title="Frame the drawing (F)" disabled>Fit</button>
-		<button id="wire" type="button" aria-pressed="false" title="Wireframe (W)" disabled>Wireframe</button>
-		<button id="lines" type="button" aria-pressed="true" title="Convert wire geometry (lines, arcs, polylines)">Lines</button>
-		<button id="download" type="button" title="Save the converted glTF binary" disabled>Download GLB</button>
-	</div>
-	<div id="busy" class="hidden">Converting…</div>
-	<div id="info" class="hidden">
-		<div class="title" id="infoTitle"></div>
-		<dl id="stats"></dl>
-		<div class="error hidden" id="error"></div>
-		<details id="warningsBox" class="hidden"><summary id="warningsSummary"></summary><pre id="warnings"></pre></details>
-		<details id="reportBox" class="hidden"><summary>Converter summary</summary><pre id="summary"></pre></details>
-	</div>
-</main>
-<div id="dropOverlay" class="hidden">Drop the DWG file to convert it locally</div>
+	<section id="limits">
+		<h2>What it leaves out</h2>
+		<ul>
+			<li>Text, dimensions, hatches, leaders, viewports, lights and raster images. The summary lists them as skipped.</li>
+			<li>Layouts (paper space). Only model space is converted; a warning counts what stays behind.</li>
+			<li>External references. An xref is skipped and named in a warning.</li>
+			<li>Dynamic blocks are converted in the state they were saved in.</li>
+			<li>A <code>MESH</code> is drawn as its unsmoothed cage.</li>
+			<li>ACIS faces without usable surface data are filled from their boundary; the summary says so.</li>
+			<li>Drawings without units (all R14 files, and others set to “unitless”) are taken as meters. Pick the units above if a drawing comes out 1000 times too large.</li>
+			<li>Texture images that a DWG names by path: open them together with the DWG. Embedded OFML materials carry their own.</li>
+			<li>Limits per drawing guard against damaged files: 10 million triangles, 1 million block instances, 60 million polyline points. The page holds the whole drawing in memory.</li>
+		</ul>
+		<p>The reverse direction, <code>gltf2dwg</code>, writes one texture per material (base color), and no animation, skins, cameras, lights or vertex colors. LibreDWG's writer for 2010 and later is new: check important files in your CAD program.</p>
+	</section>
+
+	<section id="tests" class="full">
+		<h2>How it is tested</h2>
+		<p>The repository holds {{corpusFiles}} drawings made in BricsCAD V27 by scripts: {{corpusShapes}} shapes, each saved in {{corpusVersions}} DWG versions from R14 to 2018. For each shape the right answer is known: its extents and, where they apply, its area, its volume and which way its faces point. They come from a formula where there is one, otherwise from BricsCAD. The last report, for the command line build of converter <code>{{reportCommit}}</code>:</p>
+		<div class="figures">
+			<div><b>{{match}}</b><span>match: extents within 0.2 mm, area and volume within 1 %</span></div>
+			<div><b>{{boundsOnly}}</b><span>thinner than 1 mm, checked by their extents only</span></div>
+			<div><b>{{differs}}</b><span>differ from the right answer</span></div>
+			<div><b>{{failed}}</b><span>fail to convert</span></div>
+		</div>
+		<p>LibreDWG reports recoverable decode errors on {{decodeWarnings}} of these files; their geometry still matches. The samples on this page come from the suite. Their panel runs the same comparison in your browser, on what the WebAssembly module made of the file. It can differ from the command line build in the last digits, and so in the number of triangles, as both round floating point a little differently.</p>
+		<p>Single shapes test the geometry, not whole drawings, which fail in their own ways. If one of yours converts wrongly, <a href="https://github.com/jamie-io/dwg-rs/issues">open an issue</a> with the converter summary, and the file if you can share it.</p>
+	</section>
+
+	<section id="use" class="full">
+		<h2>Use it</h2>
+		<p>Command line tools, built from source with Rust 1.85 or later and a C compiler. Everything else is in the repository.</p>
+		<pre class="code">git clone https://github.com/jamie-io/dwg-rs
+cd dwg-rs && cargo build --release
+target/release/dwg2gltf drawing.dwg              # writes drawing.glb
+target/release/dwg2gltf drawings/ -o out/        # a whole folder
+target/release/gltf2dwg model.glb -o model.dwg   # and back</pre>
+		<p>In three.js, as a loader. It is not on npm yet: build the module with <code>scripts/build-wasm.sh</code> and serve <code>packages/three-dwg-loader/src</code> and <code>wasm</code> next to each other, as this page does.</p>
+		<pre class="code">import { DWGLoader } from './three-dwg-loader/src/DWGLoader.js';
+
+const drawing = await new DWGLoader().loadAsync( 'drawing.dwg' );
+scene.add( drawing );</pre>
+		<p>From C, Delphi and other languages through <code>dwg2gltf.dll</code> and its C interface. The <a href="https://github.com/jamie-io/dwg-rs#readme">README</a> covers all three.</p>
+	</section>
+
+	<section class="full">
+		<h2>License</h2>
+		<p>GPL-3.0-or-later, like GNU LibreDWG, which is compiled in. An application that ships the converter or its WebAssembly module must offer its source code.</p>
+	</section>
+</article>
+
+<footer>
+	<p>This page: dwg-rs <a href="https://github.com/jamie-io/dwg-rs/commit/{{commitFull}}"><code>{{commit}}</code></a> ({{commitDate}}){{dirty}}, LibreDWG {{libredwg}}, three.js {{three}}. WebAssembly module {{wasmSize}}, {{wasmGzip}} compressed, loaded once.</p>
+	<p>Rendering by <a href="https://threejs.org/">three.js</a> (<a href="vendor/three/LICENSE.txt">MIT</a>). Lettering by <a href="https://github.com/hikikomori82/osifont">osifont</a> (GPL-3 with font exception). Round-trip samples: Khronos glTF sample models, CC0.</p>
+	<p>AutoCAD and DWG are trademarks of Autodesk, Inc.; BricsCAD is a trademark of Bricsys NV. This project is not affiliated with either.</p>
+</footer>
+
+<div id="dropOverlay" class="hidden">Drop the DWG to convert it here</div>
 <script type="module" src="app.js"></script>
 </body>
 </html>
