@@ -1912,7 +1912,7 @@ impl<'a> Converter<'a> {
         if let Some(&idx) = self.materials.get(&(material, color)) {
             return idx;
         }
-        let white = ACI[7];
+        let white = [255, 255, 255];
         let idx = match self.doc.material(material) {
             None => {
                 let c = color.unwrap_or(white);
