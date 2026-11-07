@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Jamie Jahn
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Make the round-trip samples of the demo site: glTF sample models from
-Khronos, with their images re-encoded at most 1024 px wide (JPEG when
-opaque), written to DWG by gltf2dwg. Next to each DWG, <id>.json records
-where the model comes from and what the source holds, for the page to
-compare the round trip with.
+"""Writes the round-trip samples of the demo site: Khronos glTF sample
+models, images re-encoded at most 1024 px wide, converted to DWG by gltf2dwg,
+each with a <name>.json about its source.
 
     python3 packages/three-dwg-loader/pages/round-trip/make.py [--gltf2dwg PATH]
 
-Downloads the models (pinned to one commit of glTF-Sample-Assets) into a
-temporary folder. Needs Pillow and a release build of gltf2dwg
-(cargo build --release).
+Needs Pillow and a release build (cargo build --release).
 """
 
 import argparse

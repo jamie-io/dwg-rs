@@ -3,11 +3,9 @@
 
 // Assembles the static demo site into OUT_DIR: the page, the loader, the
 // WebAssembly module, three.js (from node_modules) and the sample drawings of
-// gallery.json (every DWG version of each test shape, with its right answer
-// from expected.json, and the round-trip samples in round-trip/), fills the
-// page's {{facts}} (commit, versions, the test report's counts) and renders
-// the thumbnails with the page itself in headless Chrome (software WebGL).
-// Run by scripts/build-pages.sh.
+// gallery.json, fills in the page's {{facts}}, and renders the gallery
+// thumbnails with the page itself in headless Chrome (software WebGL). Run by
+// scripts/build-pages.sh.
 //
 //   node build.mjs OUT_DIR [--no-thumbs] [--chrome PATH] [--gallery LIST.json]
 //
@@ -159,7 +157,6 @@ fs.writeFileSync( path.join( outDir, 'index.html' ), page );
 
 // -- gallery ------------------------------------------------------------
 
-/** The right answer of one test drawing, as much as the page compares. */
 function answer( key ) {
 
 	const e = expected[ key ];
@@ -177,7 +174,6 @@ for ( const group of source.groups ) {
 
 		if ( shape ) {
 
-			// every version BricsCAD saved this shape in
 			const name = path.basename( shape );
 			const versions = fs.readdirSync( path.join( corpus, shape ) )
 				.map( ( f ) => new RegExp( `^${name}_(AC\\d{4})\\.dwg$` ).exec( f )?.[ 1 ] )
@@ -195,7 +191,6 @@ for ( const group of source.groups ) {
 
 		} else {
 
-			// a round trip: round-trip/<sample>.dwg and what its source held
 			const data = fs.readFileSync( path.join( roundTrips, `${sample}.dwg` ) );
 			const version = data.subarray( 0, 6 ).toString( 'latin1' );
 			copy( path.join( roundTrips, `${sample}.dwg` ), `gallery/${sample}.dwg` );
