@@ -13,6 +13,8 @@
 - Drawings with many entities with material mappers convert much faster: each texture projection frame is found again by a hash lookup instead of a comparison with every frame so far
 - Pre-2004 drawings with many polyface meshes or polylines convert in seconds instead of minutes: the vertices of each polyline are no longer looked up by scanning the whole drawing
 - Delphi example: a Direct3D 11 viewer on dwg2gltf.dll (`examples/delphi/viewer`) with shaded, edge, hidden-line, wireframe and x-ray modes, instanced drawing, measuring with snapping, material presets and a block tree, built and tested by `scripts/build-delphi-viewer.sh`
+- ACIS curved faces take far fewer triangles where the surface parameterisation is stretched (spline surfaces, some tori): refinement works in the surface's own metric, and conversions of such drawings run many times faster
+- ACIS faces whose boundary runs along a spline's domain edge no longer show gaps from folded triangles along that edge
 - scripts/build-dll.sh builds dwg2gltf.dll for Windows without the build machine's paths in it
 - QA runs compare only drawings whose GLB changed, start with the slowest drawings and use all cores when memory allows
 - C interface: dwg2gltf.dll / libdwg2gltf.so (`crates/dwg2gltf-capi`, `include/dwg2gltf.h`) with the scene as arrays for native viewers (meshes, instance tree, materials, textures, warnings, bounds) and the GLB

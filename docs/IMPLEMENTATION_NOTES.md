@@ -539,13 +539,38 @@ there are no parameters (SAT 4.0), project the vertices onto the curve.
    the last resort and then only with forward triangles; boundary vertices
    left over on a straight run are inserted into the triangle edge they lie
    on. A zero-area loop (out and back along itself) gives nothing.
+   Torus, spline and pipe faces are ear-clipped in the surface's metric
+   (the mean first fundamental form of the boundary points), and a corner
+   whose sine is at most 1e-5 counts as straight: it is no ear tip, and no
+   ear side or diagonal may run along the boundary from it. A spline's
+   domain edge is straight in uv but carries rounding noise of about 1e-9
+   after inversion; clipped by the sign of that noise, it became a fan of
+   zero-area uv triangles, on the surface fins folding across the curved
+   edge (gaps along a seat's front edge). The bounded triangulation is
+   used only where it covers the polygon at least as fully as the plain
+   one (not degraded, as many triangles); a sub-polygon whose corners are
+   all straight is clipped without the bound.
 5. Lawson edge flips to Delaunay (planes too), then split interior edges
-   whose surface midpoint deviates more than the tolerance (less the
-   distance the end points lie off the surface: a spline that only
-   approximates the face would otherwise refine its border forever), flip
-   again; at most 64 rounds and 100,000 triangles per face (hitting either
-   is reported). An edge from a pole is measured along the meridian of its
-   other end; the uv midpoint follows a spiral that never converges.
+   whose surface midpoint lies further than the tolerance from the edge
+   (less the distance the end points lie off the surface: a spline that
+   only approximates the face would otherwise refine its border forever),
+   flip again; at most 64 rounds and 100,000 triangles per face, and
+   refinement stops when the largest deviation has not halved in 8 rounds
+   (a smooth surface quarters it every round; a face whose uv triangles do
+   not follow the surface, where the parameterisation folds or jumps, kept
+   the same deviation until it reached the triangle limit). Each of these
+   is reported. An edge from a pole is measured along the meridian
+   of its other end; the uv midpoint follows a spiral that never converges.
+   On curved surfaces the flips are Delaunay in the surface's own metric:
+   the uv points of each quad are mapped by the mean first fundamental form
+   (E, F, G from differences) of its corners. In plain uv a stretched
+   parameterisation (most spline surfaces; a torus whose tube is wider
+   than its ring) gave triangles that were round in uv but slivers on the
+   surface, and refining slivers until their long edges met the tolerance
+   took many times the triangles, often up to the per-face limit. The
+   deviation is measured from the edge, not from its midpoint: where the
+   parameter runs unevenly, the uv midpoint lies to one side along the
+   surface, an offset that shrinks only with the edge length.
 6. The tolerance is per body: `max(0.1 mm / body scale, 0.1 % of the body
    diagonal)`. The body transform scale matters because bodies are often in mm.
 7. Orientation: the uv triangulation winds around Su x Sv; it is turned
